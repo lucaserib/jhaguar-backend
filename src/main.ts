@@ -6,7 +6,8 @@ import { ValidationPipe } from '@nestjs/common';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Configuração do Swagger
+  app.enableCors();
+
   const config = new DocumentBuilder()
     .setTitle('Ride-Sharing API')
     .setDescription('API para aplicativo de compartilhamento de corridas')
@@ -17,7 +18,6 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api-docs', app, document);
 
-  // Configuração do ValidationPipe global
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
