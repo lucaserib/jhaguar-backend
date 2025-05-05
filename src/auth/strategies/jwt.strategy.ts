@@ -2,28 +2,29 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../prisma/prisma.service';
-
+import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || 'dev-secret-key',
+      secretOrKey: configService.get<string>('JWT_SECRET') || 'dev-secret-key',
     });
   }
 
-  async validate(payload: { sub: string; email: string }) {
-    // Buscar o usuário no banco de dados
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-    });
-
-    // Remover a propriedade de clerkId por segurança
-    if (user) {
-      delete user['clerkId'];
-    }
-
-    return user;
+  async validate(payload: any) {
+    return {
+      id: payload.sub,
+      email: payload.email,
+      isDriver: payload.isDriver,
+      isPassenger: payload.isPassenger,
+      driverId: payload.driverId,
+      passengerId: payload.passengerId,
+      driverStatus: payload.driverStatus,
+    };
   }
 }

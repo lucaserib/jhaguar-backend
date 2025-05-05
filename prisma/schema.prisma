@@ -1,12 +1,6 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client-js"
-  output   = "../generated/prisma"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -20,22 +14,19 @@ model User {
   phone        String    @unique
   firstName    String
   lastName     String
-  gender       Gender // MALE, FEMALE, OTHER, PREFER_NOT_TO_SAY
+  password     String
+  gender       Gender
   dateOfBirth  DateTime?
-  profileImage String? // URL para imagem
+  profileImage String?
   address      String?
   isVerified   Boolean   @default(false)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
-  // Relações
   driver    Driver?
   passenger Passenger?
   ratings   Rating[]
-
-  // Auth
-  clerkId String @unique
 }
 
 enum Gender {
@@ -59,12 +50,9 @@ model Driver {
   backgroundCheckStatus Status    @default(PENDING)
   backgroundCheckDate   DateTime?
   isOnline              Boolean   @default(false)
-  acceptsFemaleOnly     Boolean   @default(false) // Se aceita corridas apenas para mulheres
+  acceptsFemaleOnly     Boolean   @default(false)
+  bankAccount           String?
 
-  // Informações bancárias (considere criptografar estes dados)
-  bankAccount String?
-
-  // Relações
   user      User             @relation(fields: [userId], references: [id])
   vehicle   Vehicle?
   rides     Ride[]
@@ -89,7 +77,6 @@ model Passenger {
   specialNeeds        Boolean @default(false)
   specialNeedsDesc    String?
 
-  // Locais favoritos
   homeAddress   String?
   homeLatitude  Float?
   homeLongitude Float?
@@ -97,7 +84,6 @@ model Passenger {
   workLatitude  Float?
   workLongitude Float?
 
-  // Relações
   user  User   @relation(fields: [userId], references: [id])
   rides Ride[]
 }
@@ -116,11 +102,10 @@ model Vehicle {
   capacity               Int
   accessibility          Boolean     @default(false)
   carImageUrl            String?
-  features               String[] // AC, WiFi, etc.
+  features               String[]
   inspectionStatus       Status      @default(PENDING)
   inspectionDate         DateTime?
 
-  // Relações
   driver Driver @relation(fields: [driverId], references: [id])
   rides  Ride[]
 }
@@ -140,26 +125,22 @@ model Ride {
   vehicleId   String?
   status      RideStatus @default(REQUESTED)
 
-  // Datas importantes
   requestTime DateTime  @default(now())
   acceptTime  DateTime?
   pickupTime  DateTime?
   dropOffTime DateTime?
 
-  // Origem
   originAddress   String
   originLatitude  Float
   originLongitude Float
 
-  // Destino
   destinationAddress   String
   destinationLatitude  Float
   destinationLongitude Float
 
-  // Detalhes da corrida
-  estimatedDuration Int // minutos
+  estimatedDuration Int
   actualDuration    Int?
-  estimatedDistance Float // quilômetros
+  estimatedDistance Float
   actualDistance    Float?
   basePrice         Float
   finalPrice        Float?
@@ -167,19 +148,16 @@ model Ride {
   paymentStatus     PaymentStatus @default(PENDING)
   paymentMethodId   String?
 
-  // Cancelamento
   cancellationReason String?
   cancellationTime   DateTime?
   cancellationFee    Float?
 
-  // Opções especiais
   isFemaleOnlyRide    Boolean   @default(false)
   specialRequirements String?
   baggageQuantity     Int       @default(0)
   rideType            RideType  @default(STANDARD)
   scheduledTime       DateTime?
 
-  // Relações
   passenger Passenger      @relation(fields: [passengerId], references: [id])
   driver    Driver?        @relation(fields: [driverId], references: [id])
   vehicle   Vehicle?       @relation(fields: [vehicleId], references: [id])
@@ -224,11 +202,10 @@ model Payment {
   currency         String        @default("BRL")
   status           PaymentStatus @default(PENDING)
   paymentMethod    String
-  paymentIntentId  String? // ID do Stripe
+  paymentIntentId  String?
   stripeCustomerId String?
   receiptUrl       String?
 
-  // Relações
   ride Ride @relation(fields: [rideId], references: [id])
 
   createdAt DateTime @default(now())
@@ -243,12 +220,10 @@ model Rating {
   rating        Float // 1-5
   review        String?
 
-  // Categorias específicas de avaliação
   cleanliness  Float?
   drivingSkill Float?
   courtesy     Float?
 
-  // Relações
   ride    Ride @relation(fields: [rideId], references: [id])
   ratedBy User @relation(fields: [ratedByUserId], references: [id])
 
@@ -266,9 +241,8 @@ model RideLocation {
   speed     Float?
   bearing   Float?
   accuracy  Float?
-  userType  UserType // DRIVER ou PASSENGER
+  userType  UserType
 
-  // Relações
   ride Ride @relation(fields: [rideId], references: [id])
 
   @@index([rideId, timestamp])
@@ -288,10 +262,9 @@ model DriverDocument {
   expiryDate       DateTime?
   isVerified       Boolean      @default(false)
   verificationDate DateTime?
-  documentUrl      String // URL do documento armazenado
+  documentUrl      String
   notes            String?
 
-  // Relações
   driver Driver @relation(fields: [driverId], references: [id])
 
   createdAt DateTime @default(now())

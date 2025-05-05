@@ -50,6 +50,15 @@ export class CreateUserDto {
   lastName: string;
 
   @ApiProperty({
+    description: 'Senha do usuário',
+    example: 'Senha123!',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  password: string;
+
+  @ApiProperty({
     description: 'Gênero do usuário',
     enum: Gender,
     example: Gender.MALE,
@@ -83,12 +92,4 @@ export class CreateUserDto {
   @IsString()
   @IsOptional()
   address?: string;
-
-  @ApiProperty({
-    description: 'ID do usuário no Clerk',
-    example: 'user_2NxVYQXSMeX0zJ0OZ1yXkNtRMUF',
-  })
-  @IsString()
-  @IsNotEmpty()
-  clerkId: string;
 }

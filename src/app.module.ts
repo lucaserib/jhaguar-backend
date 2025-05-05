@@ -11,9 +11,22 @@ import { PaymentsModule } from './payments/payments.module';
 import { RatingsModule } from './ratings/ratings.module';
 import { DocumentsModule } from './documents/documents.module';
 import { AuthModule } from './auth/auth.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
-  imports: [PrismaModule, UsersModule, DriversModule, PassengersModule, VehiclesModule, RidesModule, PaymentsModule, RatingsModule, DocumentsModule, AuthModule],
+  imports: [
+    PrismaModule,
+    UsersModule,
+    DriversModule,
+    PassengersModule,
+    VehiclesModule,
+    RidesModule,
+    PaymentsModule,
+    RatingsModule,
+    DocumentsModule,
+    AuthModule,
+    NotificationsModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

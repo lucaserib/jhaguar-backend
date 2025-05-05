@@ -1,14 +1,30 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async create(createUserDto: CreateUserDto) {
+    const hashedPassword = await bcrypt.hash(
+      createUserDto.password || 'default123',
+      10,
+    );
+
     return this.prisma.user.create({
-      data: createUserDto,
+      data: {
+        email: createUserDto.email,
+        phone: createUserDto.phone,
+        firstName: createUserDto.firstName,
+        lastName: createUserDto.lastName,
+        password: hashedPassword,
+        gender: createUserDto.gender,
+        dateOfBirth: createUserDto.dateOfBirth,
+        profileImage: createUserDto.profileImage,
+        address: createUserDto.address,
+      },
     });
   }
 
@@ -27,7 +43,6 @@ export class UsersService {
         isVerified: true,
         createdAt: true,
         updatedAt: true,
-        // Excluímos o clerkId por segurança
       },
     });
   }
@@ -48,7 +63,6 @@ export class UsersService {
         isVerified: true,
         createdAt: true,
         updatedAt: true,
-        // Excluímos o clerkId por segurança
       },
     });
 
@@ -59,18 +73,16 @@ export class UsersService {
     return user;
   }
 
-  async findByClerkId(clerkId: string) {
+  async findByEmail(email: string) {
     const user = await this.prisma.user.findUnique({
-      where: { clerkId },
+      where: { email },
     });
 
     if (!user) {
       return null;
     }
 
-    // Removendo clerkId antes de retornar
-    const { clerkId: _, ...userWithoutClerkId } = user;
-    return userWithoutClerkId;
+    return user;
   }
 
   async update(id: string, updateData: Partial<CreateUserDto>) {
