@@ -1,8 +1,8 @@
-// src/auth/auth.service.ts
 import {
   Injectable,
   NotFoundException,
   UnauthorizedException,
+  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
@@ -24,7 +24,15 @@ export class AuthService {
     });
 
     if (existingUser) {
-      throw new UnauthorizedException('E-mail já está em uso.');
+      throw new ConflictException('E-mail já está em uso.');
+    }
+
+    const existingPhone = await this.prisma.user.findUnique({
+      where: { phone: registerDto.phone },
+    });
+
+    if (existingPhone) {
+      throw new ConflictException('Telefone já está em uso.');
     }
 
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
@@ -87,16 +95,69 @@ export class AuthService {
     return this.createTokenFromUser(user.id, user.email);
   }
 
+  async updateDriverStatus(driverId: string, status: Status) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: {
+        user: {
+          select: {
+            email: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
+    }
+
+    await this.prisma.driver.update({
+      where: { id: driverId },
+      data: { accountStatus: status },
+    });
+
+    return {
+      success: true,
+      message: 'Status do motorista atualizado com sucesso',
+    };
+  }
+
   async createTokenFromUser(userId: string, email: string) {
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
-      select: { id: true, accountStatus: true },
+      select: {
+        id: true,
+        accountStatus: true,
+        licenseNumber: true,
+        licenseExpiryDate: true,
+        bankAccount: true,
+      },
     });
 
     const passenger = await this.prisma.passenger.findUnique({
       where: { userId },
       select: { id: true },
     });
+
+    const userDetails = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        profileImage: true,
+      },
+    });
+
+    if (!userDetails) {
+      throw new NotFoundException(`Usuário com ID ${userId} não encontrado`);
+    }
 
     const payload = {
       email,
@@ -112,12 +173,23 @@ export class AuthService {
       access_token: this.jwtService.sign(payload),
       user: {
         id: userId,
-        email,
+        email: userDetails.email,
+        firstName: userDetails.firstName,
+        lastName: userDetails.lastName,
+        phone: userDetails.phone,
+        profileImage: userDetails.profileImage,
         isDriver: !!driver,
         isPassenger: !!passenger,
         driverStatus: driver?.accountStatus || null,
         driverId: driver?.id || null,
         passengerId: passenger?.id || null,
+        driverDetails: driver
+          ? {
+              licenseNumber: driver.licenseNumber,
+              licenseExpiryDate: driver.licenseExpiryDate,
+              bankAccount: driver.bankAccount,
+            }
+          : null,
       },
     };
   }
@@ -130,6 +202,7 @@ export class AuthService {
         email: true,
         firstName: true,
         lastName: true,
+        phone: true,
         profileImage: true,
       },
     });
@@ -140,7 +213,13 @@ export class AuthService {
 
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
-      select: { id: true, accountStatus: true },
+      select: {
+        id: true,
+        accountStatus: true,
+        licenseNumber: true,
+        licenseExpiryDate: true,
+        bankAccount: true,
+      },
     });
 
     const passenger = await this.prisma.passenger.findUnique({
@@ -155,6 +234,13 @@ export class AuthService {
       driverStatus: driver?.accountStatus || null,
       driverId: driver?.id || null,
       passengerId: passenger?.id || null,
+      driverDetails: driver
+        ? {
+            licenseNumber: driver.licenseNumber,
+            licenseExpiryDate: driver.licenseExpiryDate,
+            bankAccount: driver.bankAccount,
+          }
+        : null,
     };
   }
 }

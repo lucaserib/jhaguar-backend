@@ -2,10 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDriverDto } from './dto/create-driver.dto';
 import { Status } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class DriversService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notificationsService: NotificationsService,
+  ) {}
 
   async create(createDriverDto: CreateDriverDto) {
     const user = await this.prisma.user.findUnique({
@@ -18,7 +22,40 @@ export class DriversService {
       );
     }
 
-    return this.prisma.driver.create({
+    const existingDriver = await this.prisma.driver.findUnique({
+      where: { userId: createDriverDto.userId },
+    });
+
+    if (existingDriver) {
+      const updatedDriver = await this.prisma.driver.update({
+        where: { userId: createDriverDto.userId },
+        data: {
+          licenseNumber: createDriverDto.licenseNumber,
+          licenseExpiryDate: new Date(createDriverDto.licenseExpiryDate),
+          bankAccount: createDriverDto.bankAccount,
+          accountStatus: Status.PENDING,
+          backgroundCheckStatus: Status.PENDING,
+        },
+        include: {
+          user: {
+            select: {
+              firstName: true,
+              lastName: true,
+              email: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      await this.notificationsService.sendDriverApplicationNotification(
+        updatedDriver,
+      );
+
+      return updatedDriver;
+    }
+
+    const newDriver = await this.prisma.driver.create({
       data: {
         userId: createDriverDto.userId,
         licenseNumber: createDriverDto.licenseNumber,
@@ -27,7 +64,23 @@ export class DriversService {
         accountStatus: Status.PENDING,
         backgroundCheckStatus: Status.PENDING,
       },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+          },
+        },
+      },
     });
+
+    await this.notificationsService.sendDriverApplicationNotification(
+      newDriver,
+    );
+
+    return newDriver;
   }
 
   async findAll() {
@@ -42,6 +95,7 @@ export class DriversService {
             profileImage: true,
           },
         },
+        vehicle: true,
       },
     });
   }
@@ -59,6 +113,7 @@ export class DriversService {
             profileImage: true,
           },
         },
+        vehicle: true,
       },
     });
 
@@ -82,6 +137,7 @@ export class DriversService {
             profileImage: true,
           },
         },
+        vehicle: true,
       },
     });
 
@@ -95,16 +151,47 @@ export class DriversService {
   async updateStatus(id: string, status: Status) {
     const driver = await this.prisma.driver.findUnique({
       where: { id },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+      },
     });
 
     if (!driver) {
       throw new NotFoundException(`Motorista com ID ${id} não encontrado`);
     }
 
-    return this.prisma.driver.update({
+    const updatedDriver = await this.prisma.driver.update({
       where: { id },
       data: { accountStatus: status },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+      },
     });
+
+    await this.notificationsService.sendDriverStatusUpdateNotification(
+      updatedDriver,
+      status,
+    );
+
+    return {
+      id: updatedDriver.id,
+      userId: updatedDriver.userId,
+      status: updatedDriver.accountStatus,
+      user: updatedDriver.user,
+      message: `Status do motorista atualizado para ${status}`,
+    };
   }
 
   async updateDocuments(id: string, documentData: any) {
