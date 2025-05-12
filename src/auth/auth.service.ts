@@ -13,6 +13,7 @@ import { Status } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
+  private userInfoCache = new Map<string, { data: any; expiry: number }>();
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -195,6 +196,13 @@ export class AuthService {
   }
 
   async getUserInfo(userId: string) {
+    const cachedInfo = this.userInfoCache.get(userId);
+    const now = Date.now();
+
+    if (cachedInfo && cachedInfo.expiry > now) {
+      return cachedInfo.data;
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -227,7 +235,7 @@ export class AuthService {
       select: { id: true },
     });
 
-    return {
+    const result = {
       ...user,
       isDriver: !!driver,
       isPassenger: !!passenger,
@@ -242,5 +250,12 @@ export class AuthService {
           }
         : null,
     };
+
+    this.userInfoCache.set(userId, {
+      data: result,
+      expiry: now + 5000,
+    });
+
+    return result;
   }
 }

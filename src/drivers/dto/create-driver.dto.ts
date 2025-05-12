@@ -1,4 +1,3 @@
-// src/drivers/dto/create-driver.dto.ts
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsDateString,
@@ -27,6 +26,7 @@ export class CreateDriverDto {
   @ApiProperty({
     description: 'Data de expiração da licença',
     example: '2025-12-31',
+    required: false,
   })
   @IsDateString()
   @IsNotEmpty()

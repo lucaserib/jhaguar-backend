@@ -22,6 +22,13 @@ export class DriversService {
       );
     }
 
+    const defaultExpiryDate = new Date();
+    defaultExpiryDate.setFullYear(defaultExpiryDate.getFullYear() + 1);
+
+    const licenseExpiryDate = createDriverDto.licenseExpiryDate
+      ? new Date(createDriverDto.licenseExpiryDate)
+      : defaultExpiryDate;
+
     const existingDriver = await this.prisma.driver.findUnique({
       where: { userId: createDriverDto.userId },
     });
@@ -30,8 +37,8 @@ export class DriversService {
       const updatedDriver = await this.prisma.driver.update({
         where: { userId: createDriverDto.userId },
         data: {
-          licenseNumber: createDriverDto.licenseNumber,
-          licenseExpiryDate: new Date(createDriverDto.licenseExpiryDate),
+          licenseNumber: createDriverDto.licenseNumber || 'TEMP',
+          licenseExpiryDate: licenseExpiryDate,
           bankAccount: createDriverDto.bankAccount,
           accountStatus: Status.PENDING,
           backgroundCheckStatus: Status.PENDING,
@@ -58,8 +65,8 @@ export class DriversService {
     const newDriver = await this.prisma.driver.create({
       data: {
         userId: createDriverDto.userId,
-        licenseNumber: createDriverDto.licenseNumber,
-        licenseExpiryDate: new Date(createDriverDto.licenseExpiryDate),
+        licenseNumber: createDriverDto.licenseNumber || 'TEMP',
+        licenseExpiryDate: licenseExpiryDate,
         bankAccount: createDriverDto.bankAccount,
         accountStatus: Status.PENDING,
         backgroundCheckStatus: Status.PENDING,
