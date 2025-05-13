@@ -59,17 +59,29 @@ export class AuthService {
         },
       });
     } else if (registerDto.userType === 'DRIVER') {
-      await this.prisma.driver.create({
-        data: {
-          userId: user.id,
-          licenseNumber: 'TEMP',
-          licenseExpiryDate: new Date(
-            new Date().setFullYear(new Date().getFullYear() + 1),
-          ),
-          accountStatus: Status.PENDING,
-          backgroundCheckStatus: Status.PENDING,
-        },
-      });
+      try {
+        await this.prisma.driver.create({
+          data: {
+            userId: user.id,
+            licenseNumber: `TEMP-${user.id}`,
+            licenseExpiryDate: new Date(
+              new Date().setFullYear(new Date().getFullYear() + 1),
+            ),
+            accountStatus: Status.PENDING,
+            backgroundCheckStatus: Status.PENDING,
+          },
+        });
+      } catch (error) {
+        await this.prisma.user.delete({ where: { id: user.id } });
+
+        if (
+          error.code === 'P2002' &&
+          error.meta?.target?.includes('licenseNumber')
+        ) {
+          throw new ConflictException('Número de licença já está em uso.');
+        }
+        throw error;
+      }
     }
 
     return this.createTokenFromUser(user.id, user.email);

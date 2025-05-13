@@ -34,14 +34,12 @@ export class DriversService {
     });
 
     if (existingDriver) {
-      const updatedDriver = await this.prisma.driver.update({
+      return this.prisma.driver.update({
         where: { userId: createDriverDto.userId },
         data: {
-          licenseNumber: createDriverDto.licenseNumber || 'TEMP',
-          licenseExpiryDate: licenseExpiryDate,
+          licenseNumber: createDriverDto.licenseNumber,
+          licenseExpiryDate: new Date(createDriverDto.licenseExpiryDate),
           bankAccount: createDriverDto.bankAccount,
-          accountStatus: Status.PENDING,
-          backgroundCheckStatus: Status.PENDING,
         },
         include: {
           user: {
@@ -54,12 +52,6 @@ export class DriversService {
           },
         },
       });
-
-      await this.notificationsService.sendDriverApplicationNotification(
-        updatedDriver,
-      );
-
-      return updatedDriver;
     }
 
     const newDriver = await this.prisma.driver.create({
