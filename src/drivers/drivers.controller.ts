@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Status } from '@prisma/client';
 import { User } from '../auth/decorator/user.decorator';
 import { UpdateDriverStatusDto } from './dto/update-driver-status.dto';
+import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
 
 @ApiTags('Motoristas')
 @Controller('drivers')
@@ -96,5 +97,31 @@ export class DriversController {
   @ApiResponse({ status: 404, description: 'Motorista não encontrado' })
   async uploadDocuments(@Param('id') id: string, @Body() documentData: any) {
     return this.driversService.updateDocuments(id, documentData);
+  }
+
+  @Patch('location')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Atualizar localização do motorista' })
+  @ApiResponse({
+    status: 200,
+    description: 'Localização atualizada com sucesso',
+  })
+  @ApiResponse({ status: 404, description: 'Motorista não encontrado' })
+  async updateLocation(
+    @Body() updateLocationDto: UpdateDriverLocationDto,
+    @User() user: any,
+  ) {
+    return this.driversService.updateLocation(user.driverId, updateLocationDto);
+  }
+
+  @Get('online')
+  @ApiOperation({ summary: 'Listar motoristas online' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de motoristas online retornada com sucesso',
+  })
+  async findOnlineDrivers() {
+    return this.driversService.findOnlineDrivers();
   }
 }

@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateDriverDto } from './dto/create-driver.dto';
 import { Status } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
 
 @Injectable()
 export class DriversService {
@@ -209,5 +210,100 @@ export class DriversService {
         backgroundCheckDate: new Date(),
       },
     });
+  }
+
+  async updateLocation(
+    driverId: string,
+    updateLocationDto: UpdateDriverLocationDto,
+  ) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
+    }
+
+    const updatedDriver = await this.prisma.driver.update({
+      where: { id: driverId },
+      data: {
+        currentLatitude: updateLocationDto.latitude,
+        currentLongitude: updateLocationDto.longitude,
+        isAvailable: updateLocationDto.isAvailable ?? driver.isAvailable,
+        isOnline: updateLocationDto.isOnline ?? driver.isOnline,
+      },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            profileImage: true,
+          },
+        },
+        vehicle: true,
+      },
+    });
+
+    return {
+      id: updatedDriver.id,
+      latitude: updatedDriver.currentLatitude,
+      longitude: updatedDriver.currentLongitude,
+      isAvailable: updatedDriver.isAvailable,
+      isOnline: updatedDriver.isOnline,
+      user: updatedDriver.user,
+      vehicle: updatedDriver.vehicle,
+    };
+  }
+
+  async findOnlineDrivers() {
+    return this.prisma.driver.findMany({
+      where: {
+        isOnline: true,
+        accountStatus: 'APPROVED',
+        currentLatitude: { not: null },
+        currentLongitude: { not: null },
+      },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            profileImage: true,
+          },
+        },
+        vehicle: true,
+      },
+    });
+  }
+
+  async toggleAvailability(driverId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
+    }
+
+    const updatedDriver = await this.prisma.driver.update({
+      where: { id: driverId },
+      data: {
+        isAvailable: !driver.isAvailable,
+      },
+    });
+
+    return {
+      id: updatedDriver.id,
+      isAvailable: updatedDriver.isAvailable,
+      message: `Motorista ${updatedDriver.isAvailable ? 'disponível' : 'indisponível'} para corridas`,
+    };
   }
 }

@@ -12,6 +12,7 @@ import { RatingsModule } from './ratings/ratings.module';
 import { DocumentsModule } from './documents/documents.module';
 import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { MapsModule } from './maps/maps.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     DocumentsModule,
     AuthModule,
     NotificationsModule,
+    MapsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
