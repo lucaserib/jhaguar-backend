@@ -28,8 +28,6 @@ import {
 
 @ApiTags('Maps')
 @Controller('maps')
-@UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
 export class MapsController {
   constructor(private readonly mapsService: MapsService) {}
 
@@ -41,9 +39,7 @@ export class MapsController {
     type: NearbyDriversResponse,
   })
   @ApiResponse({ status: 400, description: 'Dados inválidos' })
-  async findNearbyDrivers(
-    @Body() findNearbyDriversDto: FindNearbyDriversDto,
-  ): Promise<NearbyDriversResponse> {
+  async findNearbyDrivers(@Body() findNearbyDriversDto: FindNearbyDriversDto) {
     try {
       const drivers =
         await this.mapsService.findNearbyDrivers(findNearbyDriversDto);
@@ -52,17 +48,24 @@ export class MapsController {
         success: true,
         data: drivers,
         count: drivers.length,
+        message: `${drivers.length} motoristas encontrados`,
       };
     } catch (error) {
-      throw new BadRequestException(
-        error instanceof Error
-          ? error.message
-          : 'Erro ao buscar motoristas próximos',
-      );
+      return {
+        success: false,
+        data: [],
+        count: 0,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Erro ao buscar motoristas próximos',
+      };
     }
   }
 
   @Post('calculate-route')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Calcular rota entre dois pontos' })
   @ApiResponse({
     status: 200,
@@ -70,24 +73,28 @@ export class MapsController {
     type: RouteResponse,
   })
   @ApiResponse({ status: 400, description: 'Dados inválidos' })
-  async calculateRoute(
-    @Body() calculateRouteDto: CalculateRouteDto,
-  ): Promise<RouteResponse> {
+  async calculateRoute(@Body() calculateRouteDto: CalculateRouteDto) {
     try {
       const route = await this.mapsService.calculateRoute(calculateRouteDto);
 
       return {
         success: true,
         data: route,
+        message: 'Rota calculada com sucesso',
       };
     } catch (error) {
-      throw new BadRequestException(
-        error instanceof Error ? error.message : 'Erro ao calcular rota',
-      );
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao calcular rota',
+      };
     }
   }
 
   @Post('calculate-price')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Calcular preço estimado da corrida' })
   @ApiResponse({
     status: 200,
@@ -95,7 +102,7 @@ export class MapsController {
     type: PriceResponse,
   })
   @ApiResponse({ status: 400, description: 'Dados inválidos' })
-  calculatePrice(@Body() calculatePriceDto: CalculatePriceDto): PriceResponse {
+  calculatePrice(@Body() calculatePriceDto: CalculatePriceDto) {
     try {
       const price = this.mapsService.calculateBasePrice(calculatePriceDto);
 
@@ -111,11 +118,15 @@ export class MapsController {
             surgeMultiplier: calculatePriceDto.surgeMultiplier || 1,
           },
         },
+        message: 'Preço calculado com sucesso',
       };
     } catch (error) {
-      throw new BadRequestException(
-        error instanceof Error ? error.message : 'Erro ao calcular preço',
-      );
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao calcular preço',
+      };
     }
   }
 
@@ -132,12 +143,16 @@ export class MapsController {
   async reverseGeocode(
     @Query('lat') latitude: string,
     @Query('lng') longitude: string,
-  ): Promise<GeocodeResponse> {
+  ) {
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
 
     if (isNaN(lat) || isNaN(lng)) {
-      throw new BadRequestException('Coordenadas inválidas');
+      return {
+        success: false,
+        data: null,
+        message: 'Coordenadas inválidas',
+      };
     }
 
     try {
@@ -152,11 +167,15 @@ export class MapsController {
             longitude: lng,
           },
         },
+        message: 'Endereço obtido com sucesso',
       };
     } catch (error) {
-      throw new BadRequestException(
-        error instanceof Error ? error.message : 'Erro ao obter endereço',
-      );
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao obter endereço',
+      };
     }
   }
 

@@ -37,21 +37,29 @@ enum Gender {
 }
 
 model Driver {
-  id                    String    @id @default(uuid())
-  userId                String    @unique
-  licenseNumber         String    @unique
-  licenseExpiryDate     DateTime
-  isAvailable           Boolean   @default(false)
-  currentLatitude       Float?
-  currentLongitude      Float?
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  licenseNumber     String   @unique
+  licenseExpiryDate DateTime
+  isAvailable       Boolean  @default(false)
+
+  // Campos adicionados para o sistema de mapas
+  currentLatitude    Float?
+  currentLongitude   Float?
+  lastLocationUpdate DateTime?
+
   averageRating         Float     @default(0)
   totalRides            Int       @default(0)
   accountStatus         Status    @default(PENDING) // PENDING, APPROVED, REJECTED, SUSPENDED
   backgroundCheckStatus Status    @default(PENDING)
   backgroundCheckDate   DateTime?
-  isOnline              Boolean   @default(false)
-  acceptsFemaleOnly     Boolean   @default(false)
-  bankAccount           String?
+
+  // Campos adicionados para disponibilidade
+  isOnline     Boolean @default(false)
+  isActiveTrip Boolean @default(false)
+
+  acceptsFemaleOnly Boolean @default(false)
+  bankAccount       String?
 
   user      User             @relation(fields: [userId], references: [id])
   vehicle   Vehicle?
@@ -59,6 +67,8 @@ model Driver {
   documents DriverDocument[]
 
   @@index([currentLatitude, currentLongitude])
+  @@index([isOnline, isAvailable])
+  @@index([accountStatus])
 }
 
 enum Status {
