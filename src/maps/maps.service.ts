@@ -1,3 +1,4 @@
+// src/maps/maps.service.ts - Trecho melhorado do método findNearbyDrivers
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
@@ -36,6 +37,7 @@ export class MapsService {
     const { latitude, longitude, radius = 10, limit = 10 } = request;
 
     try {
+      // Primeiro, tentar buscar motoristas reais no banco
       const drivers = await this.prisma.driver.findMany({
         where: {
           isOnline: true,
@@ -56,26 +58,43 @@ export class MapsService {
               color: true,
               licensePlate: true,
               vehicleType: true,
+              carImageUrl: true,
             },
           },
         },
         take: limit * 2,
       });
 
-      const realDriversWithCoords = drivers.filter(
+      // Filtrar motoristas com coordenadas válidas
+      const driversWithCoords = drivers.filter(
         (driver) => driver.currentLatitude && driver.currentLongitude,
       );
 
-      if (realDriversWithCoords.length > 0) {
-        return this.processRealDrivers(
-          realDriversWithCoords,
+      // Se temos motoristas com coordenadas
+      if (driversWithCoords.length > 0) {
+        const nearbyDrivers = await this.processRealDrivers(
+          driversWithCoords,
           latitude,
           longitude,
           radius,
           limit,
         );
+
+        // Se encontramos motoristas próximos, retornar
+        if (nearbyDrivers.length > 0) {
+          this.logger.log(
+            `Encontrados ${nearbyDrivers.length} motoristas reais próximos`,
+          );
+          return nearbyDrivers;
+        }
       }
 
+      // Se não há motoristas próximos suficientes, gerar motoristas simulados
+      this.logger.warn(
+        'Nenhum motorista real próximo encontrado. Gerando motoristas simulados...',
+      );
+
+      // Se há motoristas no banco mas estão longe, usar seus dados
       if (drivers.length > 0) {
         return this.generateSimulatedDriversFromReal(
           drivers,
@@ -85,12 +104,12 @@ export class MapsService {
         );
       }
 
-      // Se não houver motoristas cadastrados, usar dados completamente simulados
-      return this.generateDummyDrivers(latitude, longitude, limit);
+      // Se não há nenhum motorista no banco, gerar completamente simulados
+      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
     } catch (error) {
       this.logger.error('Erro ao buscar motoristas próximos:', error);
-      // Em caso de erro, retornar dados simulados
-      return this.generateDummyDrivers(latitude, longitude, limit);
+      // Em caso de erro, sempre retornar motoristas simulados
+      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
     }
   }
 
@@ -136,21 +155,15 @@ export class MapsService {
     limit: number,
   ): Promise<DriverWithDistance[]> {
     const simulatedDrivers = drivers.slice(0, limit).map((driver, index) => {
-      const distanceMultiplier = (index + 1) * 0.005;
-      const angle = (index * 45) % 360;
-      const angleRad = angle * (Math.PI / 180);
+      // Gerar posições próximas ao usuário
+      const angle = (index * (360 / limit)) % 360;
+      const distance = 0.5 + Math.random() * 2; // Entre 0.5km e 2.5km
 
-      const latOffset = Math.cos(angleRad) * distanceMultiplier;
-      const lngOffset = Math.sin(angleRad) * distanceMultiplier;
-
-      const driverLat = userLat + latOffset;
-      const driverLng = userLng + lngOffset;
-
-      const distance = this.calculateDistance(
+      const { lat: driverLat, lng: driverLng } = this.generatePointAtDistance(
         userLat,
         userLng,
-        driverLat,
-        driverLng,
+        distance,
+        angle,
       );
 
       return {
@@ -159,9 +172,17 @@ export class MapsService {
         latitude: driverLat,
         longitude: driverLng,
         user: driver.user,
-        vehicle: driver.vehicle,
-        averageRating: driver.averageRating || 4.5,
-        totalRides: driver.totalRides || Math.floor(Math.random() * 100) + 10,
+        vehicle: driver.vehicle || {
+          model: 'Carro Popular',
+          color: 'Prata',
+          licensePlate: `SIM-${index}A${Math.floor(Math.random() * 100)}`,
+          vehicleType: 'ECONOMY',
+          carImageUrl:
+            driver.vehicle?.carImageUrl ||
+            'https://cdn.imagin.studio/getimage?customer=img&make=volkswagen&modelFamily=gol',
+        },
+        averageRating: driver.averageRating || 4.5 + Math.random() * 0.5,
+        totalRides: driver.totalRides || Math.floor(Math.random() * 500) + 50,
         distance,
       };
     });
@@ -169,87 +190,65 @@ export class MapsService {
     return this.addEstimates(simulatedDrivers, userLat, userLng);
   }
 
-  private generateDummyDrivers(
+  private generateDynamicDummyDrivers(
     userLat: number,
     userLng: number,
     limit: number,
   ): DriverWithDistance[] {
-    const dummyDrivers = [
-      {
-        firstName: 'Carlos',
-        lastName: 'Silva',
-        profileImage: 'https://randomuser.me/api/portraits/men/32.jpg',
-        vehicle: {
-          model: 'Toyota Corolla',
-          color: 'Prata',
-          licensePlate: 'ABC-1234',
-        },
-      },
-      {
-        firstName: 'Maria',
-        lastName: 'Oliveira',
-        profileImage: 'https://randomuser.me/api/portraits/women/44.jpg',
-        vehicle: {
-          model: 'Honda Civic',
-          color: 'Branco',
-          licensePlate: 'DEF-5678',
-        },
-      },
-      {
-        firstName: 'João',
-        lastName: 'Pereira',
-        profileImage: 'https://randomuser.me/api/portraits/men/55.jpg',
-        vehicle: {
-          model: 'Volkswagen Golf',
-          color: 'Azul',
-          licensePlate: 'GHI-9012',
-        },
-      },
-      {
-        firstName: 'Ana',
-        lastName: 'Costa',
-        profileImage: 'https://randomuser.me/api/portraits/women/22.jpg',
-        vehicle: {
-          model: 'Nissan Sentra',
-          color: 'Preto',
-          licensePlate: 'JKL-3456',
-        },
-      },
-      {
-        firstName: 'Pedro',
-        lastName: 'Santos',
-        profileImage: 'https://randomuser.me/api/portraits/men/67.jpg',
-        vehicle: {
-          model: 'Hyundai HB20',
-          color: 'Vermelho',
-          licensePlate: 'MNO-7890',
-        },
-      },
+    // Nomes e dados brasileiros mais realistas
+    const brazilianNames = [
+      { firstName: 'João', lastName: 'Silva', gender: 'male' },
+      { firstName: 'Maria', lastName: 'Santos', gender: 'female' },
+      { firstName: 'Pedro', lastName: 'Oliveira', gender: 'male' },
+      { firstName: 'Ana', lastName: 'Costa', gender: 'female' },
+      { firstName: 'Carlos', lastName: 'Pereira', gender: 'male' },
+      { firstName: 'Juliana', lastName: 'Rodrigues', gender: 'female' },
+      { firstName: 'Lucas', lastName: 'Almeida', gender: 'male' },
+      { firstName: 'Fernanda', lastName: 'Lima', gender: 'female' },
+      { firstName: 'Rafael', lastName: 'Souza', gender: 'male' },
+      { firstName: 'Patricia', lastName: 'Ferreira', gender: 'female' },
     ];
 
-    return dummyDrivers.slice(0, limit).map((dummy, index) => {
-      const distanceMultiplier = (index + 1) * 0.005;
-      const angle = (index * 45) % 360;
-      const angleRad = angle * (Math.PI / 180);
+    const vehicles = [
+      { make: 'Volkswagen', model: 'Gol', type: 'ECONOMY' },
+      { make: 'Chevrolet', model: 'Onix', type: 'ECONOMY' },
+      { make: 'Fiat', model: 'Mobi', type: 'ECONOMY' },
+      { make: 'Honda', model: 'Civic', type: 'COMFORT' },
+      { make: 'Toyota', model: 'Corolla', type: 'COMFORT' },
+      { make: 'Hyundai', model: 'HB20', type: 'ECONOMY' },
+      { make: 'Renault', model: 'Sandero', type: 'ECONOMY' },
+      { make: 'Nissan', model: 'Versa', type: 'ECONOMY' },
+      { make: 'Jeep', model: 'Compass', type: 'SUV' },
+      { make: 'Volkswagen', model: 'Virtus', type: 'COMFORT' },
+    ];
 
-      const latOffset = Math.cos(angleRad) * distanceMultiplier;
-      const lngOffset = Math.sin(angleRad) * distanceMultiplier;
+    const colors = ['Prata', 'Branco', 'Preto', 'Vermelho', 'Azul', 'Cinza'];
 
-      const driverLat = userLat + latOffset;
-      const driverLng = userLng + lngOffset;
-      const distance = this.calculateDistance(
+    return Array.from({ length: limit }, (_, index) => {
+      const nameData = brazilianNames[index % brazilianNames.length];
+      const vehicle = vehicles[index % vehicles.length];
+      const color = colors[Math.floor(Math.random() * colors.length)];
+
+      // Distribuir motoristas em círculo ao redor do usuário
+      const angle = (index * (360 / limit)) % 360;
+      const distance = 0.5 + Math.random() * 3; // Entre 0.5km e 3.5km
+
+      const { lat: driverLat, lng: driverLng } = this.generatePointAtDistance(
         userLat,
         userLng,
-        driverLat,
-        driverLng,
+        distance,
+        angle,
       );
 
       const estimatedTime = Math.max(
-        5,
-        Math.round(distance * 2 + Math.random() * 10),
+        3,
+        Math.round(distance * 2 + Math.random() * 5),
       );
       const estimatedPrice =
-        Math.round((15 + distance * 2.5 + Math.random() * 10) * 100) / 100;
+        Math.round((15 + distance * 3 + Math.random() * 10) * 100) / 100;
+
+      // Gerar ID de imagem aleatório para o perfil
+      const imageId = Math.floor(Math.random() * 100) + 1;
 
       return {
         id: `dummy-${index + 1}`,
@@ -257,19 +256,56 @@ export class MapsService {
         latitude: driverLat,
         longitude: driverLng,
         user: {
-          firstName: dummy.firstName,
-          lastName: dummy.lastName,
-          profileImage: dummy.profileImage,
+          firstName: nameData.firstName,
+          lastName: nameData.lastName,
+          profileImage: `https://randomuser.me/api/portraits/${nameData.gender === 'male' ? 'men' : 'women'}/${imageId}.jpg`,
         },
-        vehicle: dummy.vehicle,
+        vehicle: {
+          model: `${vehicle.make} ${vehicle.model}`,
+          color: color,
+          licensePlate: `DYN-${Math.floor(1000 + Math.random() * 8999)}`,
+          vehicleType: vehicle.type,
+          carImageUrl: `https://cdn.imagin.studio/getimage?customer=img&make=${vehicle.make.toLowerCase()}&modelFamily=${vehicle.model.toLowerCase()}`,
+        },
         averageRating: Number((4.0 + Math.random() * 1).toFixed(1)),
-        totalRides: Math.floor(Math.random() * 200) + 50,
+        totalRides: Math.floor(Math.random() * 500) + 50,
         distance,
         estimatedTime,
         estimatedPrice,
       };
     });
   }
+
+  private generatePointAtDistance(
+    lat: number,
+    lng: number,
+    distanceKm: number,
+    bearing: number,
+  ): { lat: number; lng: number } {
+    const R = 6371; // Raio da Terra em km
+    const bearingRad = bearing * (Math.PI / 180);
+    const latRad = lat * (Math.PI / 180);
+    const lngRad = lng * (Math.PI / 180);
+
+    const newLatRad = Math.asin(
+      Math.sin(latRad) * Math.cos(distanceKm / R) +
+        Math.cos(latRad) * Math.sin(distanceKm / R) * Math.cos(bearingRad),
+    );
+
+    const newLngRad =
+      lngRad +
+      Math.atan2(
+        Math.sin(bearingRad) * Math.sin(distanceKm / R) * Math.cos(latRad),
+        Math.cos(distanceKm / R) - Math.sin(latRad) * Math.sin(newLatRad),
+      );
+
+    return {
+      lat: newLatRad * (180 / Math.PI),
+      lng: newLngRad * (180 / Math.PI),
+    };
+  }
+
+  // ... resto do código permanece igual ...
 
   private async addEstimates(
     drivers: DriverWithDistance[],
@@ -326,6 +362,8 @@ export class MapsService {
       }),
     );
   }
+
+  // ... resto dos métodos continua igual ...
 
   async calculateRoute(
     request: CalculateRouteRequest,

@@ -7,19 +7,26 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Iniciando seed do banco de dados...');
 
-  // Coordenadas de algumas cidades brasileiras para distribuir os motoristas
-  const locations = [
-    { name: 'São Paulo - Centro', lat: -23.5505, lng: -46.6333 },
-    { name: 'São Paulo - Vila Madalena', lat: -23.5367, lng: -46.6925 },
-    { name: 'São Paulo - Ibirapuera', lat: -23.5911, lng: -46.6577 },
-    { name: 'São Paulo - Morumbi', lat: -23.6178, lng: -46.7019 },
-    { name: 'São Paulo - Santana', lat: -23.5092, lng: -46.6285 },
-    { name: 'Rio de Janeiro - Copacabana', lat: -22.9708, lng: -43.1882 },
-    { name: 'Rio de Janeiro - Ipanema', lat: -22.9838, lng: -43.2058 },
-    { name: 'Belo Horizonte - Centro', lat: -19.9167, lng: -43.9345 },
+  // Coordenadas de bairros de São Paulo
+  const saoPauloLocations = [
+    { name: 'Vila Mariana', lat: -23.5874, lng: -46.6376 },
+    { name: 'Pinheiros', lat: -23.5614, lng: -46.6823 },
+    { name: 'Moema', lat: -23.6012, lng: -46.6697 },
+    { name: 'Jardins', lat: -23.5732, lng: -46.6658 },
+    { name: 'Itaim Bibi', lat: -23.5837, lng: -46.6781 },
+    { name: 'Vila Olímpia', lat: -23.5954, lng: -46.6851 },
+    { name: 'Brooklin', lat: -23.6065, lng: -46.6962 },
+    { name: 'Campo Belo', lat: -23.6267, lng: -46.6721 },
+    { name: 'Santo Amaro', lat: -23.6547, lng: -46.7099 },
+    { name: 'Morumbi', lat: -23.6084, lng: -46.7167 },
+    { name: 'Perdizes', lat: -23.5408, lng: -46.6796 },
+    { name: 'Higienópolis', lat: -23.5453, lng: -46.6574 },
+    { name: 'Consolação', lat: -23.5505, lng: -46.6585 },
+    { name: 'Bela Vista', lat: -23.5629, lng: -46.6544 },
+    { name: 'Liberdade', lat: -23.5598, lng: -46.6356 },
   ];
 
-  // Dados dos motoristas de exemplo
+  // Dados dos motoristas
   const driversData = [
     {
       personal: {
@@ -28,16 +35,21 @@ async function main() {
         email: 'carlos.silva@exemplo.com',
         phone: '+5511987654321',
         gender: Gender.MALE,
+        profileImage: 'https://randomuser.me/api/portraits/men/32.jpg',
       },
       license: 'CNH123456789',
       vehicle: {
         make: 'Toyota',
         model: 'Corolla',
-        year: 2020,
+        year: 2022,
         color: 'Prata',
-        licensePlate: 'ABC-1234',
-        vehicleType: VehicleType.ECONOMY,
+        licensePlate: 'ABC-1A23',
+        vehicleType: VehicleType.COMFORT,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=toyota&modelFamily=corolla',
       },
+      rating: 4.8,
+      totalRides: 342,
     },
     {
       personal: {
@@ -46,16 +58,21 @@ async function main() {
         email: 'maria.oliveira@exemplo.com',
         phone: '+5511987654322',
         gender: Gender.FEMALE,
+        profileImage: 'https://randomuser.me/api/portraits/women/44.jpg',
       },
       license: 'CNH123456790',
       vehicle: {
         make: 'Honda',
         model: 'Civic',
-        year: 2021,
+        year: 2023,
         color: 'Branco',
-        licensePlate: 'DEF-5678',
+        licensePlate: 'DEF-5B78',
         vehicleType: VehicleType.COMFORT,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=honda&modelFamily=civic',
       },
+      rating: 4.9,
+      totalRides: 567,
     },
     {
       personal: {
@@ -64,16 +81,21 @@ async function main() {
         email: 'joao.pereira@exemplo.com',
         phone: '+5511987654323',
         gender: Gender.MALE,
+        profileImage: 'https://randomuser.me/api/portraits/men/55.jpg',
       },
       license: 'CNH123456791',
       vehicle: {
         make: 'Volkswagen',
-        model: 'Jetta',
-        year: 2019,
+        model: 'Virtus',
+        year: 2023,
         color: 'Preto',
-        licensePlate: 'GHI-9012',
-        vehicleType: VehicleType.COMFORT,
+        licensePlate: 'GHI-9C12',
+        vehicleType: VehicleType.ECONOMY,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=volkswagen&modelFamily=virtus',
       },
+      rating: 4.7,
+      totalRides: 289,
     },
     {
       personal: {
@@ -82,6 +104,7 @@ async function main() {
         email: 'ana.santos@exemplo.com',
         phone: '+5511987654324',
         gender: Gender.FEMALE,
+        profileImage: 'https://randomuser.me/api/portraits/women/22.jpg',
       },
       license: 'CNH123456792',
       vehicle: {
@@ -89,9 +112,13 @@ async function main() {
         model: 'Versa',
         year: 2022,
         color: 'Azul',
-        licensePlate: 'JKL-3456',
+        licensePlate: 'JKL-3D56',
         vehicleType: VehicleType.ECONOMY,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=nissan&modelFamily=versa',
       },
+      rating: 4.9,
+      totalRides: 412,
     },
     {
       personal: {
@@ -100,16 +127,21 @@ async function main() {
         email: 'pedro.costa@exemplo.com',
         phone: '+5511987654325',
         gender: Gender.MALE,
+        profileImage: 'https://randomuser.me/api/portraits/men/67.jpg',
       },
       license: 'CNH123456793',
       vehicle: {
         make: 'Hyundai',
         model: 'HB20',
-        year: 2021,
+        year: 2023,
         color: 'Vermelho',
-        licensePlate: 'MNO-7890',
+        licensePlate: 'MNO-7E90',
         vehicleType: VehicleType.ECONOMY,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=hyundai&modelFamily=hb20',
       },
+      rating: 4.6,
+      totalRides: 198,
     },
     {
       personal: {
@@ -118,16 +150,21 @@ async function main() {
         email: 'luiza.ferreira@exemplo.com',
         phone: '+5511987654326',
         gender: Gender.FEMALE,
+        profileImage: 'https://randomuser.me/api/portraits/women/65.jpg',
       },
       license: 'CNH123456794',
       vehicle: {
         make: 'Chevrolet',
-        model: 'Onix',
-        year: 2020,
+        model: 'Onix Plus',
+        year: 2023,
         color: 'Cinza',
-        licensePlate: 'PQR-1234',
+        licensePlate: 'PQR-1F34',
         vehicleType: VehicleType.ECONOMY,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=chevrolet&modelFamily=onix',
       },
+      rating: 4.8,
+      totalRides: 523,
     },
     {
       personal: {
@@ -136,16 +173,21 @@ async function main() {
         email: 'roberto.lima@exemplo.com',
         phone: '+5511987654327',
         gender: Gender.MALE,
+        profileImage: 'https://randomuser.me/api/portraits/men/43.jpg',
       },
       license: 'CNH123456795',
       vehicle: {
-        make: 'Ford',
-        model: 'Ka',
-        year: 2021,
+        make: 'Toyota',
+        model: 'Yaris',
+        year: 2022,
         color: 'Branco',
-        licensePlate: 'STU-5678',
+        licensePlate: 'STU-5G78',
         vehicleType: VehicleType.ECONOMY,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=toyota&modelFamily=yaris',
       },
+      rating: 4.7,
+      totalRides: 376,
     },
     {
       personal: {
@@ -154,28 +196,79 @@ async function main() {
         email: 'fernanda.alves@exemplo.com',
         phone: '+5511987654328',
         gender: Gender.FEMALE,
+        profileImage: 'https://randomuser.me/api/portraits/women/68.jpg',
       },
       license: 'CNH123456796',
       vehicle: {
         make: 'Renault',
-        model: 'Sandero',
-        year: 2019,
+        model: 'Kwid',
+        year: 2023,
         color: 'Prata',
-        licensePlate: 'VWX-9012',
+        licensePlate: 'VWX-9H12',
         vehicleType: VehicleType.ECONOMY,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=renault&modelFamily=kwid',
       },
+      rating: 4.5,
+      totalRides: 156,
+    },
+    {
+      personal: {
+        firstName: 'Marcos',
+        lastName: 'Rodrigues',
+        email: 'marcos.rodrigues@exemplo.com',
+        phone: '+5511987654329',
+        gender: Gender.MALE,
+        profileImage: 'https://randomuser.me/api/portraits/men/52.jpg',
+      },
+      license: 'CNH123456797',
+      vehicle: {
+        make: 'Jeep',
+        model: 'Compass',
+        year: 2023,
+        color: 'Preto',
+        licensePlate: 'YZA-3I45',
+        vehicleType: VehicleType.SUV,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=jeep&modelFamily=compass',
+      },
+      rating: 4.9,
+      totalRides: 432,
+    },
+    {
+      personal: {
+        firstName: 'Patricia',
+        lastName: 'Mendes',
+        email: 'patricia.mendes@exemplo.com',
+        phone: '+5511987654330',
+        gender: Gender.FEMALE,
+        profileImage: 'https://randomuser.me/api/portraits/women/91.jpg',
+      },
+      license: 'CNH123456798',
+      vehicle: {
+        make: 'Honda',
+        model: 'HR-V',
+        year: 2023,
+        color: 'Branco',
+        licensePlate: 'BCD-6J78',
+        vehicleType: VehicleType.SUV,
+        carImageUrl:
+          'https://cdn.imagin.studio/getimage?customer=img&make=honda&modelFamily=hr-v',
+      },
+      rating: 4.8,
+      totalRides: 278,
     },
   ];
 
-  console.log('👤 Criando motoristas...');
+  console.log('👤 Criando motoristas em São Paulo...');
 
   for (let i = 0; i < driversData.length; i++) {
     const driverData = driversData[i];
-    const location = locations[i % locations.length];
+    const location = saoPauloLocations[i % saoPauloLocations.length];
 
-    // Adicionar pequena variação na localização para não ficarem todos no mesmo ponto
-    const latVariation = (Math.random() - 0.5) * 0.02; // ±0.01 grau
-    const lngVariation = (Math.random() - 0.5) * 0.02;
+    // Adicionar pequena variação aleatória para simular movimento real
+    const latVariation = (Math.random() - 0.5) * 0.01; // ±0.005 grau
+    const lngVariation = (Math.random() - 0.5) * 0.01;
 
     try {
       // Verificar se o usuário já existe
@@ -195,6 +288,7 @@ async function main() {
             lastName: driverData.personal.lastName,
             password: hashedPassword,
             gender: driverData.personal.gender,
+            profileImage: driverData.personal.profileImage,
             isVerified: true,
           },
         });
@@ -213,21 +307,21 @@ async function main() {
           data: {
             userId: user.id,
             licenseNumber: driverData.license,
-            licenseExpiryDate: new Date(2025, 11, 31), // 31 de dezembro de 2025
+            licenseExpiryDate: new Date(2025, 11, 31),
             accountStatus: Status.APPROVED,
             backgroundCheckStatus: Status.APPROVED,
             backgroundCheckDate: new Date(),
-            isOnline: Math.random() > 0.3, // 70% online
-            isAvailable: Math.random() > 0.2, // 80% disponível quando online
+            isOnline: Math.random() > 0.2, // 80% online
+            isAvailable: Math.random() > 0.3, // 70% disponível
             currentLatitude: location.lat + latVariation,
             currentLongitude: location.lng + lngVariation,
-            averageRating: 4.0 + Math.random() * 1.0, // Entre 4.0 e 5.0
-            totalRides: Math.floor(Math.random() * 500) + 50, // Entre 50 e 549
+            averageRating: driverData.rating,
+            totalRides: driverData.totalRides,
           },
         });
 
         console.log(
-          `🚗 Motorista criado: ${user.firstName} (${location.name})`,
+          `🚗 Motorista criado: ${user.firstName} em ${location.name} (${driver.isOnline ? 'Online' : 'Offline'})`,
         );
       }
 
@@ -251,13 +345,14 @@ async function main() {
             vehicleType: driverData.vehicle.vehicleType,
             capacity: 4,
             accessibility: false,
+            carImageUrl: driverData.vehicle.carImageUrl,
             inspectionStatus: Status.APPROVED,
             inspectionDate: new Date(),
           },
         });
 
         console.log(
-          `🚙 Veículo criado: ${driverData.vehicle.make} ${driverData.vehicle.model}`,
+          `🚙 Veículo criado: ${driverData.vehicle.make} ${driverData.vehicle.model} (${driverData.vehicle.licensePlate})`,
         );
       }
     } catch (error) {
@@ -269,7 +364,7 @@ async function main() {
   }
 
   // Criar alguns passageiros de exemplo
-  console.log('👥 Criando passageiros de exemplo...');
+  console.log('\n👥 Criando passageiros de exemplo...');
 
   const passengersData = [
     {
@@ -278,6 +373,7 @@ async function main() {
       email: 'lucas.mendes@exemplo.com',
       phone: '+5511999888777',
       gender: Gender.MALE,
+      profileImage: 'https://randomuser.me/api/portraits/men/86.jpg',
     },
     {
       firstName: 'Juliana',
@@ -285,6 +381,15 @@ async function main() {
       email: 'juliana.rodrigues@exemplo.com',
       phone: '+5511999888778',
       gender: Gender.FEMALE,
+      profileImage: 'https://randomuser.me/api/portraits/women/79.jpg',
+    },
+    {
+      firstName: 'Rafael',
+      lastName: 'Souza',
+      email: 'rafael.souza@exemplo.com',
+      phone: '+5511999888779',
+      gender: Gender.MALE,
+      profileImage: 'https://randomuser.me/api/portraits/men/73.jpg',
     },
   ];
 
@@ -305,6 +410,7 @@ async function main() {
             lastName: passengerData.lastName,
             password: hashedPassword,
             gender: passengerData.gender,
+            profileImage: passengerData.profileImage,
             isVerified: true,
           },
         });
@@ -325,7 +431,20 @@ async function main() {
     }
   }
 
-  console.log('🎉 Seed concluído com sucesso!');
+  // Estatísticas finais
+  const totalDrivers = await prisma.driver.count();
+  const onlineDrivers = await prisma.driver.count({
+    where: { isOnline: true },
+  });
+  const availableDrivers = await prisma.driver.count({
+    where: { isOnline: true, isAvailable: true },
+  });
+
+  console.log('\n📊 Estatísticas do Seed:');
+  console.log(`Total de motoristas: ${totalDrivers}`);
+  console.log(`Motoristas online: ${onlineDrivers}`);
+  console.log(`Motoristas disponíveis: ${availableDrivers}`);
+  console.log('\n🎉 Seed concluído com sucesso!');
 }
 
 main()
@@ -336,6 +455,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-
-// package.json - adicionar script:
-// "db:seed": "tsx prisma/seed.ts"
