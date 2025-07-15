@@ -24,9 +24,10 @@ model User {
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
-  driver    Driver?
+  driver    Driver?    @relation(fields: [driverId], references: [id])
   passenger Passenger?
   ratings   Rating[]
+  driverId  String?
 }
 
 enum Gender {
@@ -60,11 +61,13 @@ model Driver {
   isArmoredVehicle  Boolean @default(false)
   bankAccount       String?
 
-  user            User             @relation(fields: [userId], references: [id])
-  vehicle         Vehicle?
-  rides           Ride[]
-  documents       DriverDocument[]
-  driverRideTypes DriverRideType[]
+  user               Driver?          @relation("DriverToDriver", fields: [userId], references: [id])
+  vehicle            Vehicle?
+  rides              Ride[]
+  documents          DriverDocument[]
+  supportedRideTypes DriverRideType[]
+  User               User[]
+  Driver             Driver?          @relation("DriverToDriver")
 
   @@index([currentLatitude, currentLongitude])
   @@index([isOnline, isAvailable])
@@ -148,7 +151,7 @@ model RideTypeConfig {
 
   basePrice       Float
   pricePerKm      Float
-  pricePerMin     Float
+  pricePerMinute  Float
   surgeMultiplier Float @default(1.0)
   minimumPrice    Float
 
@@ -157,8 +160,6 @@ model RideTypeConfig {
 
   rides         Ride[]
   driverSupport DriverRideType[]
-
-  @@index([name])
 }
 
 enum RideTypeEnum {
@@ -166,8 +167,8 @@ enum RideTypeEnum {
   FEMALE_ONLY
   LUXURY
   ARMORED
-  MOTORCYCLE
   DELIVERY
+  MOTORCYCLE
   EXPRESS
   SCHEDULED
   SHARED
@@ -230,20 +231,21 @@ model Ride {
   isDelivery           Boolean @default(false)
   deliveryInstructions String?
 
-  passenger Passenger      @relation(fields: [passengerId], references: [id])
-  driver    Driver?        @relation(fields: [driverId], references: [id])
-  vehicle   Vehicle?       @relation(fields: [vehicleId], references: [id])
-  ratings   Rating[]
-  payment   Payment?
-  locations RideLocation[]
+  passenger      Passenger       @relation(fields: [passengerId], references: [id])
+  driver         Driver?         @relation(fields: [driverId], references: [id])
+  vehicle        Vehicle?        @relation(fields: [vehicleId], references: [id])
+  rideTypeConfig RideTypeConfig? @relation(fields: [rideTypeConfigId], references: [id])
+  ratings        Rating[]
+  payment        Payment?
+  locations      RideLocation[]
 
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  RideTypeConfig RideTypeConfig? @relation(fields: [rideTypeConfigId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status])
   @@index([passengerId])
   @@index([driverId])
+  @@index([rideTypeConfigId])
 }
 
 enum RideStatus {
@@ -352,5 +354,7 @@ enum DocumentType {
   VEHICLE_INSURANCE
   BACKGROUND_CHECK
   PROFILE_PHOTO
+  ARMORED_VEHICLE_CERTIFICATE
+  MOTORCYCLE_LICENSE
   OTHER
 }

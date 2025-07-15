@@ -1,4 +1,3 @@
-// src/maps/maps.service.ts - Trecho melhorado do método findNearbyDrivers
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +14,7 @@ import {
   GoogleGeocodeApiResponse,
   BaseRates,
 } from './interfaces/maps.interfaces';
+import { RideTypeEnum, Gender, VehicleType } from '@prisma/client';
 
 @Injectable()
 export class MapsService {
@@ -37,7 +37,6 @@ export class MapsService {
     const { latitude, longitude, radius = 10, limit = 10 } = request;
 
     try {
-      // Primeiro, tentar buscar motoristas reais no banco
       const drivers = await this.prisma.driver.findMany({
         where: {
           isOnline: true,
@@ -45,11 +44,12 @@ export class MapsService {
           accountStatus: 'APPROVED',
         },
         include: {
-          user: {
+          User: {
             select: {
               firstName: true,
               lastName: true,
               profileImage: true,
+              gender: true,
             },
           },
           vehicle: {
@@ -59,18 +59,26 @@ export class MapsService {
               licensePlate: true,
               vehicleType: true,
               carImageUrl: true,
+              isArmored: true,
+              isLuxury: true,
+              isMotorcycle: true,
+              deliveryCapable: true,
+            },
+          },
+          supportedRideTypes: {
+            where: { isActive: true },
+            include: {
+              rideType: true,
             },
           },
         },
         take: limit * 2,
       });
 
-      // Filtrar motoristas com coordenadas válidas
       const driversWithCoords = drivers.filter(
         (driver) => driver.currentLatitude && driver.currentLongitude,
       );
 
-      // Se temos motoristas com coordenadas
       if (driversWithCoords.length > 0) {
         const nearbyDrivers = await this.processRealDrivers(
           driversWithCoords,
@@ -80,7 +88,6 @@ export class MapsService {
           limit,
         );
 
-        // Se encontramos motoristas próximos, retornar
         if (nearbyDrivers.length > 0) {
           this.logger.log(
             `Encontrados ${nearbyDrivers.length} motoristas reais próximos`,
@@ -89,12 +96,10 @@ export class MapsService {
         }
       }
 
-      // Se não há motoristas próximos suficientes, gerar motoristas simulados
       this.logger.warn(
         'Nenhum motorista real próximo encontrado. Gerando motoristas simulados...',
       );
-
-      // Se há motoristas no banco mas estão longe, usar seus dados
+      //TODO: Implementar busca de motorisras reais apenas para produção.
       if (drivers.length > 0) {
         return this.generateSimulatedDriversFromReal(
           drivers,
@@ -104,11 +109,115 @@ export class MapsService {
         );
       }
 
-      // Se não há nenhum motorista no banco, gerar completamente simulados
       return this.generateDynamicDummyDrivers(latitude, longitude, limit);
     } catch (error) {
       this.logger.error('Erro ao buscar motoristas próximos:', error);
       // Em caso de erro, sempre retornar motoristas simulados
+      //Retirar em produção.
+      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
+    }
+  }
+
+  async findNearbyDriversForRideType(
+    request: NearbyDriversRequest & {
+      rideTypeId?: string;
+      userGender?: Gender;
+      requiresArmored?: boolean;
+    },
+  ): Promise<DriverWithDistance[]> {
+    const {
+      latitude,
+      longitude,
+      radius = 10,
+      limit = 10,
+      rideTypeId,
+      userGender,
+      requiresArmored = false,
+    } = request;
+
+    try {
+      const driverFilters: any = {
+        isOnline: true,
+        isAvailable: true,
+        accountStatus: 'APPROVED',
+        currentLatitude: { not: null },
+        currentLongitude: { not: null },
+      };
+
+      if (rideTypeId) {
+        driverFilters.supportedRideTypes = {
+          some: {
+            rideTypeId,
+            isActive: true,
+          },
+        };
+      }
+
+      const rideType = rideTypeId
+        ? await this.prisma.rideTypeConfig.findUnique({
+            where: { id: rideTypeId },
+          })
+        : null;
+
+      if (rideType?.femaleOnly) {
+        driverFilters.user = {
+          gender: Gender.FEMALE,
+        };
+      }
+
+      if (requiresArmored || rideType?.requiresArmored) {
+        driverFilters.vehicle = {
+          isArmored: true,
+        };
+      }
+
+      const drivers = await this.prisma.driver.findMany({
+        where: driverFilters,
+        include: {
+          User: {
+            select: {
+              firstName: true,
+              lastName: true,
+              profileImage: true,
+              gender: true,
+            },
+          },
+          vehicle: {
+            select: {
+              model: true,
+              color: true,
+              licensePlate: true,
+              vehicleType: true,
+              carImageUrl: true,
+              isArmored: true,
+              isLuxury: true,
+              isMotorcycle: true,
+              deliveryCapable: true,
+            },
+          },
+          supportedRideTypes: {
+            where: { isActive: true },
+            include: {
+              rideType: true,
+            },
+          },
+        },
+        take: limit * 2,
+      });
+
+      if (drivers.length > 0) {
+        return this.processRealDrivers(
+          drivers,
+          latitude,
+          longitude,
+          radius,
+          limit,
+        );
+      }
+
+      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
+    } catch (error) {
+      this.logger.error('Erro ao buscar motoristas por tipo:', error);
       return this.generateDynamicDummyDrivers(latitude, longitude, limit);
     }
   }
@@ -134,11 +243,13 @@ export class MapsService {
           userId: driver.userId,
           latitude: driver.currentLatitude!,
           longitude: driver.currentLongitude!,
-          user: driver.user,
+          user: driver.User?.[0],
           vehicle: driver.vehicle,
           averageRating: driver.averageRating,
           totalRides: driver.totalRides,
           distance,
+          supportedRideTypes:
+            driver.supportedRideTypes?.map((srt: any) => srt.rideType) || [],
         };
       })
       .filter((driver) => driver.distance <= radius)
@@ -155,9 +266,8 @@ export class MapsService {
     limit: number,
   ): Promise<DriverWithDistance[]> {
     const simulatedDrivers = drivers.slice(0, limit).map((driver, index) => {
-      // Gerar posições próximas ao usuário
       const angle = (index * (360 / limit)) % 360;
-      const distance = 0.5 + Math.random() * 2; // Entre 0.5km e 2.5km
+      const distance = 0.5 + Math.random() * 2;
 
       const { lat: driverLat, lng: driverLng } = this.generatePointAtDistance(
         userLat,
@@ -171,7 +281,7 @@ export class MapsService {
         userId: driver.userId,
         latitude: driverLat,
         longitude: driverLng,
-        user: driver.user,
+        user: driver.User?.[0],
         vehicle: driver.vehicle || {
           model: 'Carro Popular',
           color: 'Prata',
@@ -180,10 +290,16 @@ export class MapsService {
           carImageUrl:
             driver.vehicle?.carImageUrl ||
             'https://cdn.imagin.studio/getimage?customer=img&make=volkswagen&modelFamily=gol',
+          isArmored: false,
+          isLuxury: false,
+          isMotorcycle: false,
+          deliveryCapable: true,
         },
         averageRating: driver.averageRating || 4.5 + Math.random() * 0.5,
         totalRides: driver.totalRides || Math.floor(Math.random() * 500) + 50,
         distance,
+        supportedRideTypes:
+          driver.supportedRideTypes?.map((srt: any) => srt.rideType) || [],
       };
     });
 
@@ -195,7 +311,6 @@ export class MapsService {
     userLng: number,
     limit: number,
   ): DriverWithDistance[] {
-    // Nomes e dados brasileiros mais realistas
     const brazilianNames = [
       { firstName: 'João', lastName: 'Silva', gender: 'male' },
       { firstName: 'Maria', lastName: 'Santos', gender: 'female' },
@@ -210,16 +325,76 @@ export class MapsService {
     ];
 
     const vehicles = [
-      { make: 'Volkswagen', model: 'Gol', type: 'ECONOMY' },
-      { make: 'Chevrolet', model: 'Onix', type: 'ECONOMY' },
-      { make: 'Fiat', model: 'Mobi', type: 'ECONOMY' },
-      { make: 'Honda', model: 'Civic', type: 'COMFORT' },
-      { make: 'Toyota', model: 'Corolla', type: 'COMFORT' },
-      { make: 'Hyundai', model: 'HB20', type: 'ECONOMY' },
-      { make: 'Renault', model: 'Sandero', type: 'ECONOMY' },
-      { make: 'Nissan', model: 'Versa', type: 'ECONOMY' },
-      { make: 'Jeep', model: 'Compass', type: 'SUV' },
-      { make: 'Volkswagen', model: 'Virtus', type: 'COMFORT' },
+      {
+        make: 'Volkswagen',
+        model: 'Gol',
+        type: 'ECONOMY',
+        isLuxury: false,
+        isArmored: false,
+      },
+      {
+        make: 'Chevrolet',
+        model: 'Onix',
+        type: 'ECONOMY',
+        isLuxury: false,
+        isArmored: false,
+      },
+      {
+        make: 'Fiat',
+        model: 'Mobi',
+        type: 'ECONOMY',
+        isLuxury: false,
+        isArmored: false,
+      },
+      {
+        make: 'Honda',
+        model: 'Civic',
+        type: 'COMFORT',
+        isLuxury: false,
+        isArmored: false,
+      },
+      {
+        make: 'Toyota',
+        model: 'Corolla',
+        type: 'COMFORT',
+        isLuxury: false,
+        isArmored: false,
+      },
+      {
+        make: 'BMW',
+        model: 'Série 3',
+        type: 'LUXURY',
+        isLuxury: true,
+        isArmored: false,
+      },
+      {
+        make: 'Mercedes',
+        model: 'Classe C',
+        type: 'LUXURY',
+        isLuxury: true,
+        isArmored: false,
+      },
+      {
+        make: 'Toyota',
+        model: 'Hilux SW4 Blindada',
+        type: 'ARMORED_CAR',
+        isLuxury: false,
+        isArmored: true,
+      },
+      {
+        make: 'Honda',
+        model: 'CG 160',
+        type: 'MOTORCYCLE',
+        isLuxury: false,
+        isArmored: false,
+      },
+      {
+        make: 'Yamaha',
+        model: 'Fazer 250',
+        type: 'MOTORCYCLE',
+        isLuxury: false,
+        isArmored: false,
+      },
     ];
 
     const colors = ['Prata', 'Branco', 'Preto', 'Vermelho', 'Azul', 'Cinza'];
@@ -229,9 +404,8 @@ export class MapsService {
       const vehicle = vehicles[index % vehicles.length];
       const color = colors[Math.floor(Math.random() * colors.length)];
 
-      // Distribuir motoristas em círculo ao redor do usuário
       const angle = (index * (360 / limit)) % 360;
-      const distance = 0.5 + Math.random() * 3; // Entre 0.5km e 3.5km
+      const distance = 0.5 + Math.random() * 3;
 
       const { lat: driverLat, lng: driverLng } = this.generatePointAtDistance(
         userLat,
@@ -247,7 +421,6 @@ export class MapsService {
       const estimatedPrice =
         Math.round((15 + distance * 3 + Math.random() * 10) * 100) / 100;
 
-      // Gerar ID de imagem aleatório para o perfil
       const imageId = Math.floor(Math.random() * 100) + 1;
 
       return {
@@ -259,21 +432,90 @@ export class MapsService {
           firstName: nameData.firstName,
           lastName: nameData.lastName,
           profileImage: `https://randomuser.me/api/portraits/${nameData.gender === 'male' ? 'men' : 'women'}/${imageId}.jpg`,
+          gender: nameData.gender === 'male' ? Gender.MALE : Gender.FEMALE,
         },
         vehicle: {
           model: `${vehicle.make} ${vehicle.model}`,
           color: color,
           licensePlate: `DYN-${Math.floor(1000 + Math.random() * 8999)}`,
-          vehicleType: vehicle.type,
-          carImageUrl: `https://cdn.imagin.studio/getimage?customer=img&make=${vehicle.make.toLowerCase()}&modelFamily=${vehicle.model.toLowerCase()}`,
+          vehicleType: vehicle.type as VehicleType,
+          carImageUrl: `https://cdn.imagin.studio/getimage?customer=img&make=${vehicle.make.toLowerCase()}&modelFamily=${vehicle.model.toLowerCase().split(' ')[0]}`,
+          isArmored: vehicle.isArmored,
+          isLuxury: vehicle.isLuxury,
+          isMotorcycle: vehicle.type === 'MOTORCYCLE',
+          deliveryCapable: Math.random() > 0.5,
         },
         averageRating: Number((4.0 + Math.random() * 1).toFixed(1)),
         totalRides: Math.floor(Math.random() * 500) + 50,
         distance,
         estimatedTime,
         estimatedPrice,
+        supportedRideTypes: this.generateRandomSupportedTypes(
+          vehicle.type as VehicleType,
+          nameData.gender,
+        ),
       };
     });
+  }
+
+  private generateRandomSupportedTypes(
+    vehicleType: VehicleType,
+    gender: string,
+  ) {
+    const allTypes: Array<{
+      id: string;
+      type: RideTypeEnum;
+      name: string;
+      icon: string;
+    }> = [
+      {
+        id: '1',
+        type: RideTypeEnum.STANDARD,
+        name: 'Corrida Padrão',
+        icon: '🚗',
+      },
+      { id: '2', type: RideTypeEnum.EXPRESS, name: 'Express', icon: '⚡' },
+      { id: '3', type: RideTypeEnum.SCHEDULED, name: 'Agendada', icon: '📅' },
+      { id: '4', type: RideTypeEnum.SHARED, name: 'Compartilhada', icon: '👥' },
+    ];
+
+    if (vehicleType === VehicleType.LUXURY) {
+      allTypes.push({
+        id: '5',
+        type: RideTypeEnum.LUXURY,
+        name: 'Luxo',
+        icon: '💎',
+      });
+    }
+
+    if (vehicleType === VehicleType.ARMORED_CAR) {
+      allTypes.push({
+        id: '6',
+        type: RideTypeEnum.ARMORED,
+        name: 'Blindado',
+        icon: '🛡️',
+      });
+    }
+
+    if (vehicleType === VehicleType.MOTORCYCLE) {
+      allTypes.push(
+        { id: '7', type: RideTypeEnum.MOTORCYCLE, name: 'Moto', icon: '🏍️' },
+        { id: '8', type: RideTypeEnum.DELIVERY, name: 'Entrega', icon: '📦' },
+      );
+    }
+
+    if (gender === 'female') {
+      allTypes.push({
+        id: '9',
+        type: RideTypeEnum.FEMALE_ONLY,
+        name: 'Mulheres',
+        icon: '👩',
+      });
+    }
+
+    const shuffled = allTypes.sort(() => 0.5 - Math.random());
+    const count = Math.min(Math.floor(Math.random() * 3) + 2, allTypes.length);
+    return shuffled.slice(0, count);
   }
 
   private generatePointAtDistance(
@@ -282,7 +524,7 @@ export class MapsService {
     distanceKm: number,
     bearing: number,
   ): { lat: number; lng: number } {
-    const R = 6371; // Raio da Terra em km
+    const R = 6371;
     const bearingRad = bearing * (Math.PI / 180);
     const latRad = lat * (Math.PI / 180);
     const lngRad = lng * (Math.PI / 180);
@@ -304,8 +546,6 @@ export class MapsService {
       lng: newLngRad * (180 / Math.PI),
     };
   }
-
-  // ... resto do código permanece igual ...
 
   private async addEstimates(
     drivers: DriverWithDistance[],
@@ -363,7 +603,74 @@ export class MapsService {
     );
   }
 
-  // ... resto dos métodos continua igual ...
+  async calculatePriceForRideType(
+    rideTypeId: string,
+    distance: number,
+    duration: number,
+    surgeMultiplier = 1.0,
+    isPremiumTime = false,
+  ): Promise<{
+    finalPrice: number;
+    breakdown: any;
+  }> {
+    try {
+      const rideType = await this.prisma.rideTypeConfig.findUnique({
+        where: { id: rideTypeId },
+      });
+
+      if (!rideType) {
+        return {
+          finalPrice: this.calculateBasePrice({ distance, duration }),
+          breakdown: {
+            error: 'Tipo de corrida não encontrado, usando cálculo padrão',
+          },
+        };
+      }
+
+      const distanceKm = distance / 1000;
+      const durationMinutes = duration / 60;
+
+      const baseCost = rideType.basePrice;
+      const distanceCost = distanceKm * rideType.pricePerKm;
+      const timeCost = durationMinutes * rideType.pricePerMinute;
+
+      let subtotal = baseCost + distanceCost + timeCost;
+
+      const appliedSurge = Math.max(surgeMultiplier, rideType.surgeMultiplier);
+      subtotal *= appliedSurge;
+
+      const premiumFee = isPremiumTime ? subtotal * 0.15 : 0;
+
+      const finalPrice = Math.max(
+        subtotal + premiumFee,
+        rideType.minimumPrice * appliedSurge,
+      );
+
+      return {
+        finalPrice: Math.round(finalPrice * 100) / 100,
+        breakdown: {
+          rideType: rideType.name,
+          basePrice: rideType.basePrice,
+          distanceCost: Math.round(distanceCost * 100) / 100,
+          timeCost: Math.round(timeCost * 100) / 100,
+          surgeMultiplier: appliedSurge,
+          premiumFee: Math.round(premiumFee * 100) / 100,
+          minimumPrice: rideType.minimumPrice,
+          distance: distanceKm,
+          duration: durationMinutes,
+          isPremiumTime,
+        },
+      };
+    } catch (error) {
+      this.logger.error('Erro ao calcular preço por tipo:', error);
+      return {
+        finalPrice: this.calculateBasePrice({ distance, duration }),
+        breakdown: {
+          error: 'Erro no cálculo, usando preço padrão',
+        },
+      };
+    }
+  }
 
   async calculateRoute(
     request: CalculateRouteRequest,

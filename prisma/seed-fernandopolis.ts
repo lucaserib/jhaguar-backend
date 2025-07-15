@@ -1,4 +1,3 @@
-// prisma/seed-fernandopolis.ts
 import { PrismaClient, Gender, Status, VehicleType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
@@ -7,7 +6,6 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Iniciando seed do banco de dados para Fernandópolis-SP...');
 
-  // Coordenadas de bairros e regiões de Fernandópolis
   const fernandopolisLocations = [
     { name: 'Centro', lat: -20.2834, lng: -50.2466 },
     { name: 'Jardim Universitário', lat: -20.2953, lng: -50.2658 },
@@ -26,7 +24,6 @@ async function main() {
     { name: 'Jardim Santista', lat: -20.286, lng: -50.25 },
   ];
 
-  // Dados dos motoristas adaptados para Fernandópolis
   const driversData = [
     {
       personal: {
@@ -216,7 +213,6 @@ async function main() {
 
   console.log('👤 Criando motoristas em Fernandópolis...');
 
-  // Limpar dados existentes na ordem correta (foreign keys)
   await prisma.vehicle.deleteMany({});
   await prisma.driver.deleteMany({});
   await prisma.passenger.deleteMany({});
@@ -228,12 +224,10 @@ async function main() {
     const driverData = driversData[i];
     const location = fernandopolisLocations[i % fernandopolisLocations.length];
 
-    // Adicionar pequena variação aleatória para simular movimento real
-    const latVariation = (Math.random() - 0.5) * 0.005; // ±0.0025 grau
+    const latVariation = (Math.random() - 0.5) * 0.005;
     const lngVariation = (Math.random() - 0.5) * 0.005;
 
     try {
-      // Criar usuário
       const hashedPassword = await bcrypt.hash('123456', 10);
 
       const user = await prisma.user.create({
@@ -251,7 +245,6 @@ async function main() {
 
       console.log(`✅ Usuário criado: ${user.firstName} ${user.lastName}`);
 
-      // Criar motorista
       const driver = await prisma.driver.create({
         data: {
           userId: user.id,
@@ -260,8 +253,8 @@ async function main() {
           accountStatus: Status.APPROVED,
           backgroundCheckStatus: Status.APPROVED,
           backgroundCheckDate: new Date(),
-          isOnline: true, // Todos online para teste
-          isAvailable: true, // Todos disponíveis para teste
+          isOnline: true,
+          isAvailable: true,
           currentLatitude: location.lat + latVariation,
           currentLongitude: location.lng + lngVariation,
           averageRating: driverData.rating,
@@ -273,7 +266,6 @@ async function main() {
         `🚗 Motorista criado: ${user.firstName} em ${location.name} (Lat: ${driver.currentLatitude}, Lng: ${driver.currentLongitude})`,
       );
 
-      // Criar veículo
       await prisma.vehicle.create({
         data: {
           driverId: driver.id,
@@ -304,7 +296,6 @@ async function main() {
     }
   }
 
-  // Criar alguns passageiros de exemplo
   console.log('\n👥 Criando passageiros de exemplo em Fernandópolis...');
 
   const passengersData = [
@@ -358,7 +349,6 @@ async function main() {
     }
   }
 
-  // Estatísticas finais
   const totalDrivers = await prisma.driver.count();
   const onlineDrivers = await prisma.driver.count({
     where: { isOnline: true },

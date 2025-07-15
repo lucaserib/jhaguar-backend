@@ -13,6 +13,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MapsModule } from './maps/maps.module';
+import { RideTypesModule } from './ride-types/ride-types.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { MapsModule } from './maps/maps.module';
     AuthModule,
     NotificationsModule,
     MapsModule,
+    RideTypesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
