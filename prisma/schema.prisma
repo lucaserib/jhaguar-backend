@@ -43,28 +43,28 @@ model Driver {
   licenseExpiryDate DateTime
   isAvailable       Boolean  @default(false)
 
-  // Campos adicionados para o sistema de mapas
   currentLatitude    Float?
   currentLongitude   Float?
   lastLocationUpdate DateTime?
 
   averageRating         Float     @default(0)
   totalRides            Int       @default(0)
-  accountStatus         Status    @default(PENDING) // PENDING, APPROVED, REJECTED, SUSPENDED
+  accountStatus         Status    @default(PENDING)
   backgroundCheckStatus Status    @default(PENDING)
   backgroundCheckDate   DateTime?
 
-  // Campos adicionados para disponibilidade
   isOnline     Boolean @default(false)
   isActiveTrip Boolean @default(false)
 
   acceptsFemaleOnly Boolean @default(false)
+  isArmoredVehicle  Boolean @default(false)
   bankAccount       String?
 
-  user      User             @relation(fields: [userId], references: [id])
-  vehicle   Vehicle?
-  rides     Ride[]
-  documents DriverDocument[]
+  user            User             @relation(fields: [userId], references: [id])
+  vehicle         Vehicle?
+  rides           Ride[]
+  documents       DriverDocument[]
+  driverRideTypes DriverRideType[]
 
   @@index([currentLatitude, currentLongitude])
   @@index([isOnline, isAvailable])
@@ -116,6 +116,11 @@ model Vehicle {
   inspectionStatus       Status      @default(PENDING)
   inspectionDate         DateTime?
 
+  isArmored       Boolean @default(false)
+  isLuxury        Boolean @default(false)
+  isMotorcycle    Boolean @default(false)
+  deliveryCapable Boolean @default(false)
+
   driver Driver @relation(fields: [driverId], references: [id])
   rides  Ride[]
 }
@@ -126,6 +131,59 @@ enum VehicleType {
   LUXURY
   SUV
   VAN
+  MOTORCYCLE
+  ARMORED_CAR
+}
+
+model RideTypeConfig {
+  id              String        @id @default(uuid())
+  type            RideTypeEnum  @unique
+  name            String
+  description     String
+  icon            String
+  isActive        Boolean       @default(true)
+  femaleOnly      Boolean       @default(false)
+  requiresArmored Boolean       @default(false)
+  vehicleTypes    VehicleType[]
+
+  basePrice       Float
+  pricePerKm      Float
+  pricePerMin     Float
+  surgeMultiplier Float @default(1.0)
+  minimumPrice    Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rides         Ride[]
+  driverSupport DriverRideType[]
+
+  @@index([name])
+}
+
+enum RideTypeEnum {
+  STANDARD
+  FEMALE_ONLY
+  LUXURY
+  ARMORED
+  MOTORCYCLE
+  DELIVERY
+  EXPRESS
+  SCHEDULED
+  SHARED
+}
+
+model DriverRideType {
+  id         String   @id @default(uuid())
+  driverId   String
+  rideTypeId String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  driver   Driver         @relation(fields: [driverId], references: [id])
+  rideType RideTypeConfig @relation(fields: [rideTypeId], references: [id])
+
+  @@unique([driverId, rideTypeId])
 }
 
 model Ride {
@@ -168,6 +226,10 @@ model Ride {
   rideType            RideType  @default(STANDARD)
   scheduledTime       DateTime?
 
+  rideTypeConfigId     String?
+  isDelivery           Boolean @default(false)
+  deliveryInstructions String?
+
   passenger Passenger      @relation(fields: [passengerId], references: [id])
   driver    Driver?        @relation(fields: [driverId], references: [id])
   vehicle   Vehicle?       @relation(fields: [vehicleId], references: [id])
@@ -175,8 +237,9 @@ model Ride {
   payment   Payment?
   locations RideLocation[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  RideTypeConfig RideTypeConfig? @relation(fields: [rideTypeConfigId], references: [id])
 
   @@index([status])
   @@index([passengerId])
@@ -227,7 +290,7 @@ model Rating {
   rideId        String
   ratedByUserId String
   ratedUserId   String
-  rating        Float // 1-5
+  rating        Float
   review        String?
 
   cleanliness  Float?
