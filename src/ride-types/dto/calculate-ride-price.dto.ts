@@ -5,14 +5,13 @@ import {
   IsOptional,
   Min,
   Max,
-  IsEnum,
   IsBoolean,
 } from 'class-validator';
 
 export class CalculateRidePriceDto {
   @ApiProperty({
     description: 'ID do tipo de corrida',
-    example: 'rt-standard',
+    example: 'clxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
   })
   @IsString()
   rideTypeId: string;
@@ -20,22 +19,26 @@ export class CalculateRidePriceDto {
   @ApiProperty({
     description: 'Distância em metros',
     example: 5000,
+    minimum: 100,
   })
   @IsNumber()
-  @Min(0)
+  @Min(100)
   distance: number;
 
   @ApiProperty({
     description: 'Duração em segundos',
     example: 900,
+    minimum: 60,
   })
   @IsNumber()
-  @Min(0)
+  @Min(60)
   duration: number;
 
   @ApiProperty({
     description: 'Multiplicador de alta demanda',
     example: 1.2,
+    minimum: 1,
+    maximum: 5,
     required: false,
   })
   @IsOptional()
@@ -45,7 +48,7 @@ export class CalculateRidePriceDto {
   surgeMultiplier?: number;
 
   @ApiProperty({
-    description: 'Horário é considerado premium',
+    description: 'Se é horário premium (pico)',
     example: false,
     required: false,
   })

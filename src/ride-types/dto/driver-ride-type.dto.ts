@@ -4,20 +4,20 @@ import { IsString, IsBoolean, IsOptional, IsArray } from 'class-validator';
 export class AddDriverRideTypeDto {
   @ApiProperty({
     description: 'ID do motorista',
-    example: 'driver-uuid',
+    example: 'clxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
   })
   @IsString()
   driverId: string;
 
   @ApiProperty({
     description: 'ID do tipo de corrida',
-    example: 'rt-standard',
+    example: 'clxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
   })
   @IsString()
   rideTypeId: string;
 
   @ApiProperty({
-    description: 'Se está ativo',
+    description: 'Se está ativo para o motorista',
     example: true,
     required: false,
   })
@@ -29,7 +29,10 @@ export class AddDriverRideTypeDto {
 export class UpdateDriverRideTypesDto {
   @ApiProperty({
     description: 'IDs dos tipos de corrida suportados',
-    example: ['rt-standard', 'rt-female-only'],
+    example: [
+      'clxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+      'clxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxy',
+    ],
   })
   @IsArray()
   @IsString({ each: true })

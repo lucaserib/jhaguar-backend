@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
+import { RideTypesService } from '../ride-types/ride-types.service';
 import {
   Location,
   DriverWithDistance,
@@ -13,8 +14,24 @@ import {
   GoogleDirectionsApiResponse,
   GoogleGeocodeApiResponse,
   BaseRates,
+  RideTypeWithAvailability,
+  SmartRideRecommendation,
 } from './interfaces/maps.interfaces';
 import { RideTypeEnum, Gender, VehicleType } from '@prisma/client';
+
+interface RideConfirmationData {
+  origin: Location & { address: string };
+  destination: Location & { address: string };
+  rideTypeId: string;
+  estimatedDistance: number;
+  estimatedDuration: number;
+  estimatedPrice: number;
+  selectedDriverId?: string;
+  scheduledTime?: Date;
+  specialRequirements?: string;
+  hasPets?: boolean;
+  petDescription?: string;
+}
 
 @Injectable()
 export class MapsService {
@@ -24,11 +41,617 @@ export class MapsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly rideTypesService: RideTypesService,
   ) {
     this.googleApiKey =
       this.configService.get<string>('GOOGLE_API_KEY') ||
       this.configService.get<string>('EXPO_PUBLIC_GOOGLE_API_KEY') ||
       '';
+  }
+
+  async getSmartRideRecommendations(
+    userId: string,
+    origin: Location,
+    destination: Location,
+    context: {
+      isDelivery?: boolean;
+      hasPets?: boolean;
+      prefersFemaleDriver?: boolean;
+      scheduledTime?: Date;
+      specialRequirements?: string;
+    } = {},
+  ): Promise<SmartRideRecommendation> {
+    try {
+      const userInfo = await this.getUserContext(userId);
+
+      const route = await this.calculateRoute({ origin, destination });
+
+      const suggestions = await this.rideTypesService.getSuggestedRideTypes(
+        userInfo.gender,
+        origin.latitude,
+        origin.longitude,
+        context.isDelivery || false,
+        context.hasPets || false,
+      );
+
+      const enrichedSuggestions = await this.enrichSuggestionsWithDriverInfo(
+        suggestions,
+        route,
+        origin,
+        userInfo.gender,
+      );
+
+      const filteredSuggestions = this.filterSuggestionsByContext(
+        enrichedSuggestions,
+        context,
+        route,
+      );
+
+      const primaryRecommendation = this.selectPrimaryRecommendation(
+        filteredSuggestions,
+        userInfo,
+        context,
+      );
+
+      const priceComparison = await this.calculatePriceComparisons(
+        filteredSuggestions,
+        route,
+      );
+
+      const timeComparison = this.calculateTimeComparisons(filteredSuggestions);
+
+      return {
+        primaryRecommendation,
+        alternatives: filteredSuggestions.filter(
+          (s) => s.id !== primaryRecommendation.id,
+        ),
+        priceComparison,
+        timeComparison,
+        personalizedFactors: {
+          userPreferences: this.getUserPreferences(userInfo, context),
+          historicalChoices: await this.getUserHistoricalChoices(userId),
+          currentContext: this.getCurrentContextFactors(context, route),
+        },
+        confidence: this.calculateRecommendationConfidence(
+          primaryRecommendation,
+          userInfo,
+        ),
+      };
+    } catch (error) {
+      this.logger.error('Erro ao gerar recomendações inteligentes:', error);
+      throw new BadRequestException('Erro ao gerar recomendações de corrida');
+    }
+  }
+
+  async prepareRideConfirmation(
+    userId: string,
+    confirmationData: RideConfirmationData,
+  ): Promise<{
+    success: boolean;
+    data: any;
+    message: string;
+  }> {
+    try {
+      await this.validateRideConfirmationData(confirmationData);
+
+      const rideType = await this.rideTypesService.findRideTypeById(
+        confirmationData.rideTypeId,
+      );
+
+      const availableDrivers = await this.findAvailableDriversForRideType(
+        confirmationData.origin,
+        confirmationData.rideTypeId,
+        userId,
+      );
+
+      if (availableDrivers.length === 0) {
+        return {
+          success: false,
+          data: null,
+          message:
+            'Nenhum motorista disponível no momento para este tipo de corrida',
+        };
+      }
+
+      const finalPrice = await this.rideTypesService.calculateRidePrice({
+        rideTypeId: confirmationData.rideTypeId,
+        distance: confirmationData.estimatedDistance,
+        duration: confirmationData.estimatedDuration,
+        surgeMultiplier: await this.getCurrentSurgeMultiplier(
+          confirmationData.origin,
+        ),
+        isPremiumTime: this.isPremiumTime(),
+      });
+
+      const selectedDriver = confirmationData.selectedDriverId
+        ? availableDrivers.find(
+            (d) => d.id === confirmationData.selectedDriverId,
+          )
+        : this.selectBestDriver(availableDrivers, confirmationData.origin);
+
+      if (!selectedDriver) {
+        return {
+          success: false,
+          data: null,
+          message: 'Motorista selecionado não está mais disponível',
+        };
+      }
+
+      const confirmationResponse = {
+        rideType: {
+          id: rideType.id,
+          name: rideType.name,
+          description: rideType.description,
+          icon: rideType.icon,
+        },
+        route: {
+          origin: confirmationData.origin,
+          destination: confirmationData.destination,
+          distance: confirmationData.estimatedDistance,
+          duration: confirmationData.estimatedDuration,
+        },
+        pricing: {
+          basePrice: finalPrice.basePrice,
+          finalPrice: finalPrice.finalPrice,
+          currency: finalPrice.currency,
+          breakdown: finalPrice.breakdown,
+          surge: finalPrice.surgeMultiplier > 1,
+          surgeMultiplier: finalPrice.surgeMultiplier,
+        },
+        driver: {
+          id: selectedDriver.id,
+          name: `${selectedDriver.user.firstName} ${selectedDriver.user.lastName}`,
+          rating: selectedDriver.averageRating,
+          totalRides: selectedDriver.totalRides,
+          profileImage: selectedDriver.user.profileImage,
+          vehicle: selectedDriver.vehicle,
+          estimatedArrival: selectedDriver.estimatedTime || 8,
+          distance: selectedDriver.distance,
+        },
+        alternatives: availableDrivers
+          .filter((d) => d.id !== selectedDriver.id)
+          .slice(0, 2)
+          .map((driver) => ({
+            id: driver.id,
+            name: `${driver.user.firstName} ${driver.user.lastName}`,
+            rating: driver.averageRating,
+            estimatedArrival: driver.estimatedTime || 10,
+            vehicle: driver.vehicle,
+          })),
+        context: {
+          hasPets: confirmationData.hasPets,
+          specialRequirements: confirmationData.specialRequirements,
+          scheduledTime: confirmationData.scheduledTime,
+          isPremiumTime: this.isPremiumTime(),
+        },
+        confirmationToken: this.generateConfirmationToken(),
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutos
+      };
+
+      return {
+        success: true,
+        data: confirmationResponse,
+        message: 'Dados de confirmação preparados com sucesso',
+      };
+    } catch (error) {
+      this.logger.error('Erro ao preparar confirmação de corrida:', error);
+      return {
+        success: false,
+        data: null,
+        message: error instanceof Error ? error.message : 'Erro interno',
+      };
+    }
+  }
+
+  async findAvailableDriversForRideType(
+    location: Location,
+    rideTypeId: string,
+    userId?: string,
+    radius = 10,
+    limit = 10,
+  ): Promise<DriverWithDistance[]> {
+    try {
+      const rideType = await this.rideTypesService.findRideTypeById(rideTypeId);
+
+      let userGender: Gender | undefined;
+      if (userId) {
+        const userInfo = await this.getUserContext(userId);
+        userGender = userInfo.gender;
+      }
+
+      const drivers = await this.findNearbyDriversForRideType({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        radius,
+        limit: limit * 2,
+        rideTypeId,
+        userGender,
+        requiresArmored: rideType.requiresArmored,
+      });
+
+      return this.rankDriversByRelevance(drivers, location, rideType);
+    } catch (error) {
+      this.logger.error(
+        'Erro ao buscar motoristas para tipo de corrida:',
+        error,
+      );
+      return [];
+    }
+  }
+
+  private async getUserContext(userId: string): Promise<any> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        passenger: true,
+      },
+    });
+
+    return {
+      id: userId,
+      gender: user?.gender || Gender.PREFER_NOT_TO_SAY,
+      prefersFemaleDriver: user?.passenger?.prefersFemaleDriver || false,
+      specialNeeds: user?.passenger?.specialNeeds || false,
+    };
+  }
+
+  private async enrichSuggestionsWithDriverInfo(
+    suggestions: any[],
+    route: RouteCalculation,
+    origin: Location,
+    userGender: Gender,
+  ): Promise<any[]> {
+    return Promise.all(
+      suggestions.map(async (suggestion) => {
+        try {
+          // Calcular preço
+          const pricing = await this.rideTypesService.calculateRidePrice({
+            rideTypeId: suggestion.id,
+            distance: route.distance,
+            duration: route.duration,
+            surgeMultiplier: suggestion.surgeMultiplier,
+            isPremiumTime: this.isPremiumTime(),
+          });
+
+          // Buscar motoristas disponíveis
+          const drivers = await this.findAvailableDriversForRideType(
+            origin,
+            suggestion.id,
+            undefined,
+            15,
+            5,
+          );
+
+          return {
+            ...suggestion,
+            estimatedPrice: pricing.finalPrice,
+            pricing,
+            availableDrivers: drivers.length,
+            nearestDriver: drivers[0] || null,
+            estimatedArrival:
+              drivers[0]?.estimatedTime || suggestion.availability.averageEta,
+          };
+        } catch (error) {
+          return {
+            ...suggestion,
+            estimatedPrice: null,
+            availableDrivers: 0,
+            nearestDriver: null,
+          };
+        }
+      }),
+    );
+  }
+
+  private filterSuggestionsByContext(
+    suggestions: any[],
+    context: any,
+    route: RouteCalculation,
+  ): any[] {
+    return suggestions.filter((suggestion) => {
+      // Filtrar por distância máxima
+      if (suggestion.maxDistance && route.distance > suggestion.maxDistance) {
+        return false;
+      }
+
+      // Filtrar por distância mínima
+      if (suggestion.minDistance && route.distance < suggestion.minDistance) {
+        return false;
+      }
+
+      // Filtrar por disponibilidade
+      if (suggestion.availableDrivers === 0) {
+        return false;
+      }
+
+      // Filtrar por contexto específico
+      if (context.isDelivery && !suggestion.isDeliveryOnly) {
+        return false;
+      }
+
+      if (!context.isDelivery && suggestion.isDeliveryOnly) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  private selectPrimaryRecommendation(
+    suggestions: any[],
+    userInfo: any,
+    context: any,
+  ): any {
+    if (suggestions.length === 0) {
+      throw new BadRequestException('Nenhuma opção de corrida disponível');
+    }
+
+    // Aplicar pontuação baseada em preferências
+    const scoredSuggestions = suggestions.map((suggestion) => {
+      let score = suggestion.priority || 0;
+
+      // Bonificar por contexto específico
+      if (context.hasPets && suggestion.requiresPetFriendly) {
+        score += 15;
+      }
+
+      if (userInfo.prefersFemaleDriver && suggestion.femaleOnly) {
+        score += 10;
+      }
+
+      // Bonificar por disponibilidade
+      score += Math.min(suggestion.availableDrivers * 2, 10);
+
+      // Penalizar preços muito altos
+      if (suggestion.estimatedPrice > 50) {
+        score -= 10;
+      }
+
+      // Bonificar ETA baixo
+      if (suggestion.estimatedArrival < 8) {
+        score += 5;
+      }
+
+      return { ...suggestion, calculatedScore: score };
+    });
+
+    // Retornar a opção com maior pontuação
+    return scoredSuggestions.sort(
+      (a, b) => b.calculatedScore - a.calculatedScore,
+    )[0];
+  }
+
+  private async calculatePriceComparisons(
+    suggestions: any[],
+    route: RouteCalculation,
+  ): Promise<any[]> {
+    const comparisons = suggestions.map((suggestion) => ({
+      rideTypeId: suggestion.id,
+      rideTypeName: suggestion.name,
+      estimatedPrice: suggestion.estimatedPrice || 0,
+      estimatedTime: suggestion.estimatedArrival || 8,
+      vehicleTypes: suggestion.vehicleTypes,
+      savings: 0,
+      savingsPercentage: 0,
+    }));
+
+    // Calcular economias
+    const maxPrice = Math.max(...comparisons.map((c) => c.estimatedPrice));
+    comparisons.forEach((comp) => {
+      comp.savings = maxPrice - comp.estimatedPrice;
+      comp.savingsPercentage =
+        maxPrice > 0 ? (comp.savings / maxPrice) * 100 : 0;
+    });
+
+    return comparisons.sort((a, b) => a.estimatedPrice - b.estimatedPrice);
+  }
+
+  private calculateTimeComparisons(suggestions: any[]): any[] {
+    return suggestions.map((suggestion) => ({
+      rideTypeId: suggestion.id,
+      estimatedPickupTime: suggestion.estimatedArrival || 8,
+      estimatedTotalTime:
+        (suggestion.estimatedArrival || 8) +
+        Math.round((suggestion.route?.duration || 0) / 60),
+    }));
+  }
+
+  private getUserPreferences(userInfo: any, context: any): string[] {
+    const preferences: string[] = [];
+
+    if (userInfo.prefersFemaleDriver) {
+      preferences.push('Prefere motoristas mulheres');
+    }
+
+    if (userInfo.hasPets || context.hasPets) {
+      preferences.push('Viaja com pets');
+    }
+
+    if (userInfo.specialNeeds) {
+      preferences.push('Necessidades especiais');
+    }
+
+    return preferences;
+  }
+
+  private async getUserHistoricalChoices(userId: string): Promise<string[]> {
+    try {
+      const recentRides = await this.prisma.ride.findMany({
+        where: {
+          passenger: { userId },
+          status: 'COMPLETED',
+        },
+        include: {
+          RideTypeConfig: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      });
+
+      const typeFrequency = recentRides.reduce(
+        (acc, ride) => {
+          const typeName = ride.RideTypeConfig?.name || 'Desconhecido';
+          acc[typeName] = (acc[typeName] || 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      );
+
+      return Object.entries(typeFrequency)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 3)
+        .map(([type]) => `Usa frequentemente: ${type}`);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  private getCurrentContextFactors(
+    context: any,
+    route: RouteCalculation,
+  ): string[] {
+    const factors: string[] = [];
+
+    if (context.scheduledTime) {
+      factors.push('Corrida agendada');
+    }
+
+    if (route.distance > 20000) {
+      factors.push('Viagem longa');
+    }
+
+    if (this.isPremiumTime()) {
+      factors.push('Horário de pico');
+    }
+
+    if (context.specialRequirements) {
+      factors.push('Requisitos especiais');
+    }
+
+    return factors;
+  }
+
+  private calculateRecommendationConfidence(
+    recommendation: any,
+    userInfo: any,
+  ): number {
+    let confidence = 0.5; // Base 50%
+
+    // Aumentar confiança por disponibilidade
+    if (recommendation.availableDrivers > 5) {
+      confidence += 0.2;
+    } else if (recommendation.availableDrivers > 2) {
+      confidence += 0.1;
+    }
+
+    // Aumentar confiança por match de preferências
+    if (userInfo.prefersFemaleDriver && recommendation.femaleOnly) {
+      confidence += 0.15;
+    }
+
+    // Aumentar confiança por ETA baixo
+    if (recommendation.estimatedArrival < 5) {
+      confidence += 0.1;
+    }
+
+    return Math.min(confidence, 1.0);
+  }
+
+  private async validateRideConfirmationData(
+    data: RideConfirmationData,
+  ): Promise<void> {
+    if (!data.origin || !data.destination) {
+      throw new BadRequestException('Origem e destino são obrigatórios');
+    }
+
+    if (data.estimatedDistance < 100) {
+      throw new BadRequestException('Distância muito pequena');
+    }
+
+    if (data.estimatedDuration < 60) {
+      throw new BadRequestException('Duração muito pequena');
+    }
+
+    // Validar tipo de corrida
+    await this.rideTypesService.findRideTypeById(data.rideTypeId);
+  }
+
+  private async getCurrentSurgeMultiplier(location: Location): Promise<number> {
+    // Implementar lógica de surge baseada na localização e horário
+    const hour = new Date().getHours();
+    const day = new Date().getDay();
+
+    let surge = 1.0;
+
+    // Horário de pico
+    if ((hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19)) {
+      surge += 0.3;
+    }
+
+    // Final de semana à noite
+    if ((day === 5 || day === 6) && hour >= 22) {
+      surge += 0.2;
+    }
+
+    return Math.min(surge, 2.5);
+  }
+
+  private isPremiumTime(): boolean {
+    const hour = new Date().getHours();
+    return (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
+  }
+
+  private selectBestDriver(
+    drivers: DriverWithDistance[],
+    origin: Location,
+  ): DriverWithDistance {
+    return drivers.sort((a, b) => {
+      // Priorizar por: rating > proximidade > tempo de resposta
+      const ratingDiff = (b.averageRating || 0) - (a.averageRating || 0);
+      if (Math.abs(ratingDiff) > 0.2) {
+        return ratingDiff > 0 ? 1 : -1;
+      }
+
+      const distanceDiff = (a.distance || 0) - (b.distance || 0);
+      if (Math.abs(distanceDiff) > 1) {
+        return distanceDiff;
+      }
+
+      return (a.estimatedTime || 0) - (b.estimatedTime || 0);
+    })[0];
+  }
+
+  private rankDriversByRelevance(
+    drivers: DriverWithDistance[],
+    origin: Location,
+    rideType: any,
+  ): DriverWithDistance[] {
+    return drivers
+      .map((driver) => {
+        let relevanceScore = 0;
+
+        // Pontuação por rating
+        relevanceScore += (driver.averageRating || 0) * 10;
+
+        // Pontuação por proximidade (inversa)
+        relevanceScore += Math.max(0, 50 - (driver.distance || 0) * 2);
+
+        // Pontuação por experiência
+        relevanceScore += Math.min((driver.totalRides || 0) / 10, 20);
+
+        // Penalizar se está muito longe
+        if ((driver.distance || 0) > 15) {
+          relevanceScore -= 30;
+        }
+
+        return { ...driver, relevanceScore };
+      })
+      .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0))
+      .slice(0, 10);
+  }
+
+  private generateConfirmationToken(): string {
+    return `conf_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
   }
 
   async findNearbyDrivers(
@@ -44,7 +667,7 @@ export class MapsService {
           accountStatus: 'APPROVED',
         },
         include: {
-          User: {
+          user: {
             select: {
               firstName: true,
               lastName: true,
@@ -65,7 +688,7 @@ export class MapsService {
               deliveryCapable: true,
             },
           },
-          supportedRideTypes: {
+          driverRideTypes: {
             where: { isActive: true },
             include: {
               rideType: true,
@@ -79,42 +702,56 @@ export class MapsService {
         (driver) => driver.currentLatitude && driver.currentLongitude,
       );
 
-      if (driversWithCoords.length > 0) {
-        const nearbyDrivers = await this.processRealDrivers(
-          driversWithCoords,
+      // Processar motoristas reais com coordenadas
+      const nearbyDrivers: DriverWithDistance[] = [];
+
+      for (const driver of driversWithCoords) {
+        const distance = this.calculateDistance(
           latitude,
           longitude,
-          radius,
-          limit,
+          driver.currentLatitude!,
+          driver.currentLongitude!,
         );
 
-        if (nearbyDrivers.length > 0) {
-          this.logger.log(
-            `Encontrados ${nearbyDrivers.length} motoristas reais próximos`,
-          );
-          return nearbyDrivers;
+        if (distance <= radius) {
+          nearbyDrivers.push({
+            id: driver.id,
+            userId: driver.userId,
+            user: driver.user,
+            vehicle: driver.vehicle
+              ? {
+                  ...driver.vehicle,
+                  carImageUrl: driver.vehicle.carImageUrl || undefined,
+                }
+              : null,
+            averageRating: driver.averageRating,
+            totalRides: driver.totalRides,
+            latitude: driver.currentLatitude!,
+            longitude: driver.currentLongitude!,
+            distance,
+            estimatedTime: Math.round(distance * 2 + Math.random() * 5),
+          });
         }
       }
 
-      this.logger.warn(
-        'Nenhum motorista real próximo encontrado. Gerando motoristas simulados...',
-      );
-      //TODO: Implementar busca de motorisras reais apenas para produção.
-      if (drivers.length > 0) {
-        return this.generateSimulatedDriversFromReal(
-          drivers,
-          latitude,
-          longitude,
-          limit,
+      nearbyDrivers.sort((a, b) => (a.distance || 0) - (b.distance || 0));
+      const result = nearbyDrivers.slice(0, limit);
+
+      if (nearbyDrivers.length > 0) {
+        this.logger.log(
+          `Encontrados ${nearbyDrivers.length} motoristas reais próximos`,
         );
+        return nearbyDrivers;
       }
 
-      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
+      this.logger.warn(
+        'Nenhum motorista real próximo encontrado. Retornando lista vazia.',
+      );
+
+      return [];
     } catch (error) {
       this.logger.error('Erro ao buscar motoristas próximos:', error);
-      // Em caso de erro, sempre retornar motoristas simulados
-      //Retirar em produção.
-      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
+      return [];
     }
   }
 
@@ -145,7 +782,7 @@ export class MapsService {
       };
 
       if (rideTypeId) {
-        driverFilters.supportedRideTypes = {
+        driverFilters.driverRideTypes = {
           some: {
             rideTypeId,
             isActive: true,
@@ -174,7 +811,7 @@ export class MapsService {
       const drivers = await this.prisma.driver.findMany({
         where: driverFilters,
         include: {
-          User: {
+          user: {
             select: {
               firstName: true,
               lastName: true,
@@ -195,7 +832,7 @@ export class MapsService {
               deliveryCapable: true,
             },
           },
-          supportedRideTypes: {
+          driverRideTypes: {
             where: { isActive: true },
             include: {
               rideType: true,
@@ -206,469 +843,45 @@ export class MapsService {
       });
 
       if (drivers.length > 0) {
-        return this.processRealDrivers(
-          drivers,
-          latitude,
-          longitude,
-          radius,
-          limit,
-        );
+        const nearbyDrivers: DriverWithDistance[] = [];
+
+        for (const driver of drivers) {
+          const distance = this.calculateDistance(
+            latitude,
+            longitude,
+            driver.currentLatitude!,
+            driver.currentLongitude!,
+          );
+
+          if (distance <= radius) {
+            nearbyDrivers.push({
+              id: driver.id,
+              userId: driver.userId,
+              user: driver.user,
+              vehicle: driver.vehicle
+                ? {
+                    ...driver.vehicle,
+                    carImageUrl: driver.vehicle.carImageUrl || undefined,
+                  }
+                : null,
+              averageRating: driver.averageRating,
+              totalRides: driver.totalRides,
+              latitude: driver.currentLatitude!,
+              longitude: driver.currentLongitude!,
+              distance,
+              estimatedTime: Math.round(distance * 2 + Math.random() * 5),
+            });
+          }
+        }
+
+        nearbyDrivers.sort((a, b) => (a.distance || 0) - (b.distance || 0));
+        return nearbyDrivers.slice(0, limit);
       }
 
-      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
+      return [];
     } catch (error) {
       this.logger.error('Erro ao buscar motoristas por tipo:', error);
-      return this.generateDynamicDummyDrivers(latitude, longitude, limit);
-    }
-  }
-
-  private async processRealDrivers(
-    drivers: any[],
-    userLat: number,
-    userLng: number,
-    radius: number,
-    limit: number,
-  ): Promise<DriverWithDistance[]> {
-    const driversWithDistance = drivers
-      .map((driver) => {
-        const distance = this.calculateDistance(
-          userLat,
-          userLng,
-          driver.currentLatitude!,
-          driver.currentLongitude!,
-        );
-
-        return {
-          id: driver.id,
-          userId: driver.userId,
-          latitude: driver.currentLatitude!,
-          longitude: driver.currentLongitude!,
-          user: driver.User?.[0],
-          vehicle: driver.vehicle,
-          averageRating: driver.averageRating,
-          totalRides: driver.totalRides,
-          distance,
-          supportedRideTypes:
-            driver.supportedRideTypes?.map((srt: any) => srt.rideType) || [],
-        };
-      })
-      .filter((driver) => driver.distance <= radius)
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, limit);
-
-    return this.addEstimates(driversWithDistance, userLat, userLng);
-  }
-
-  private async generateSimulatedDriversFromReal(
-    drivers: any[],
-    userLat: number,
-    userLng: number,
-    limit: number,
-  ): Promise<DriverWithDistance[]> {
-    const simulatedDrivers = drivers.slice(0, limit).map((driver, index) => {
-      const angle = (index * (360 / limit)) % 360;
-      const distance = 0.5 + Math.random() * 2;
-
-      const { lat: driverLat, lng: driverLng } = this.generatePointAtDistance(
-        userLat,
-        userLng,
-        distance,
-        angle,
-      );
-
-      return {
-        id: driver.id,
-        userId: driver.userId,
-        latitude: driverLat,
-        longitude: driverLng,
-        user: driver.User?.[0],
-        vehicle: driver.vehicle || {
-          model: 'Carro Popular',
-          color: 'Prata',
-          licensePlate: `SIM-${index}A${Math.floor(Math.random() * 100)}`,
-          vehicleType: 'ECONOMY',
-          carImageUrl:
-            driver.vehicle?.carImageUrl ||
-            'https://cdn.imagin.studio/getimage?customer=img&make=volkswagen&modelFamily=gol',
-          isArmored: false,
-          isLuxury: false,
-          isMotorcycle: false,
-          deliveryCapable: true,
-        },
-        averageRating: driver.averageRating || 4.5 + Math.random() * 0.5,
-        totalRides: driver.totalRides || Math.floor(Math.random() * 500) + 50,
-        distance,
-        supportedRideTypes:
-          driver.supportedRideTypes?.map((srt: any) => srt.rideType) || [],
-      };
-    });
-
-    return this.addEstimates(simulatedDrivers, userLat, userLng);
-  }
-
-  private generateDynamicDummyDrivers(
-    userLat: number,
-    userLng: number,
-    limit: number,
-  ): DriverWithDistance[] {
-    const brazilianNames = [
-      { firstName: 'João', lastName: 'Silva', gender: 'male' },
-      { firstName: 'Maria', lastName: 'Santos', gender: 'female' },
-      { firstName: 'Pedro', lastName: 'Oliveira', gender: 'male' },
-      { firstName: 'Ana', lastName: 'Costa', gender: 'female' },
-      { firstName: 'Carlos', lastName: 'Pereira', gender: 'male' },
-      { firstName: 'Juliana', lastName: 'Rodrigues', gender: 'female' },
-      { firstName: 'Lucas', lastName: 'Almeida', gender: 'male' },
-      { firstName: 'Fernanda', lastName: 'Lima', gender: 'female' },
-      { firstName: 'Rafael', lastName: 'Souza', gender: 'male' },
-      { firstName: 'Patricia', lastName: 'Ferreira', gender: 'female' },
-    ];
-
-    const vehicles = [
-      {
-        make: 'Volkswagen',
-        model: 'Gol',
-        type: 'ECONOMY',
-        isLuxury: false,
-        isArmored: false,
-      },
-      {
-        make: 'Chevrolet',
-        model: 'Onix',
-        type: 'ECONOMY',
-        isLuxury: false,
-        isArmored: false,
-      },
-      {
-        make: 'Fiat',
-        model: 'Mobi',
-        type: 'ECONOMY',
-        isLuxury: false,
-        isArmored: false,
-      },
-      {
-        make: 'Honda',
-        model: 'Civic',
-        type: 'COMFORT',
-        isLuxury: false,
-        isArmored: false,
-      },
-      {
-        make: 'Toyota',
-        model: 'Corolla',
-        type: 'COMFORT',
-        isLuxury: false,
-        isArmored: false,
-      },
-      {
-        make: 'BMW',
-        model: 'Série 3',
-        type: 'LUXURY',
-        isLuxury: true,
-        isArmored: false,
-      },
-      {
-        make: 'Mercedes',
-        model: 'Classe C',
-        type: 'LUXURY',
-        isLuxury: true,
-        isArmored: false,
-      },
-      {
-        make: 'Toyota',
-        model: 'Hilux SW4 Blindada',
-        type: 'ARMORED_CAR',
-        isLuxury: false,
-        isArmored: true,
-      },
-      {
-        make: 'Honda',
-        model: 'CG 160',
-        type: 'MOTORCYCLE',
-        isLuxury: false,
-        isArmored: false,
-      },
-      {
-        make: 'Yamaha',
-        model: 'Fazer 250',
-        type: 'MOTORCYCLE',
-        isLuxury: false,
-        isArmored: false,
-      },
-    ];
-
-    const colors = ['Prata', 'Branco', 'Preto', 'Vermelho', 'Azul', 'Cinza'];
-
-    return Array.from({ length: limit }, (_, index) => {
-      const nameData = brazilianNames[index % brazilianNames.length];
-      const vehicle = vehicles[index % vehicles.length];
-      const color = colors[Math.floor(Math.random() * colors.length)];
-
-      const angle = (index * (360 / limit)) % 360;
-      const distance = 0.5 + Math.random() * 3;
-
-      const { lat: driverLat, lng: driverLng } = this.generatePointAtDistance(
-        userLat,
-        userLng,
-        distance,
-        angle,
-      );
-
-      const estimatedTime = Math.max(
-        3,
-        Math.round(distance * 2 + Math.random() * 5),
-      );
-      const estimatedPrice =
-        Math.round((15 + distance * 3 + Math.random() * 10) * 100) / 100;
-
-      const imageId = Math.floor(Math.random() * 100) + 1;
-
-      return {
-        id: `dummy-${index + 1}`,
-        userId: `user-dummy-${index + 1}`,
-        latitude: driverLat,
-        longitude: driverLng,
-        user: {
-          firstName: nameData.firstName,
-          lastName: nameData.lastName,
-          profileImage: `https://randomuser.me/api/portraits/${nameData.gender === 'male' ? 'men' : 'women'}/${imageId}.jpg`,
-          gender: nameData.gender === 'male' ? Gender.MALE : Gender.FEMALE,
-        },
-        vehicle: {
-          model: `${vehicle.make} ${vehicle.model}`,
-          color: color,
-          licensePlate: `DYN-${Math.floor(1000 + Math.random() * 8999)}`,
-          vehicleType: vehicle.type as VehicleType,
-          carImageUrl: `https://cdn.imagin.studio/getimage?customer=img&make=${vehicle.make.toLowerCase()}&modelFamily=${vehicle.model.toLowerCase().split(' ')[0]}`,
-          isArmored: vehicle.isArmored,
-          isLuxury: vehicle.isLuxury,
-          isMotorcycle: vehicle.type === 'MOTORCYCLE',
-          deliveryCapable: Math.random() > 0.5,
-        },
-        averageRating: Number((4.0 + Math.random() * 1).toFixed(1)),
-        totalRides: Math.floor(Math.random() * 500) + 50,
-        distance,
-        estimatedTime,
-        estimatedPrice,
-        supportedRideTypes: this.generateRandomSupportedTypes(
-          vehicle.type as VehicleType,
-          nameData.gender,
-        ),
-      };
-    });
-  }
-
-  private generateRandomSupportedTypes(
-    vehicleType: VehicleType,
-    gender: string,
-  ) {
-    const allTypes: Array<{
-      id: string;
-      type: RideTypeEnum;
-      name: string;
-      icon: string;
-    }> = [
-      {
-        id: '1',
-        type: RideTypeEnum.STANDARD,
-        name: 'Corrida Padrão',
-        icon: '🚗',
-      },
-      { id: '2', type: RideTypeEnum.EXPRESS, name: 'Express', icon: '⚡' },
-      { id: '3', type: RideTypeEnum.SCHEDULED, name: 'Agendada', icon: '📅' },
-      { id: '4', type: RideTypeEnum.SHARED, name: 'Compartilhada', icon: '👥' },
-    ];
-
-    if (vehicleType === VehicleType.LUXURY) {
-      allTypes.push({
-        id: '5',
-        type: RideTypeEnum.LUXURY,
-        name: 'Luxo',
-        icon: '💎',
-      });
-    }
-
-    if (vehicleType === VehicleType.ARMORED_CAR) {
-      allTypes.push({
-        id: '6',
-        type: RideTypeEnum.ARMORED,
-        name: 'Blindado',
-        icon: '🛡️',
-      });
-    }
-
-    if (vehicleType === VehicleType.MOTORCYCLE) {
-      allTypes.push(
-        { id: '7', type: RideTypeEnum.MOTORCYCLE, name: 'Moto', icon: '🏍️' },
-        { id: '8', type: RideTypeEnum.DELIVERY, name: 'Entrega', icon: '📦' },
-      );
-    }
-
-    if (gender === 'female') {
-      allTypes.push({
-        id: '9',
-        type: RideTypeEnum.FEMALE_ONLY,
-        name: 'Mulheres',
-        icon: '👩',
-      });
-    }
-
-    const shuffled = allTypes.sort(() => 0.5 - Math.random());
-    const count = Math.min(Math.floor(Math.random() * 3) + 2, allTypes.length);
-    return shuffled.slice(0, count);
-  }
-
-  private generatePointAtDistance(
-    lat: number,
-    lng: number,
-    distanceKm: number,
-    bearing: number,
-  ): { lat: number; lng: number } {
-    const R = 6371;
-    const bearingRad = bearing * (Math.PI / 180);
-    const latRad = lat * (Math.PI / 180);
-    const lngRad = lng * (Math.PI / 180);
-
-    const newLatRad = Math.asin(
-      Math.sin(latRad) * Math.cos(distanceKm / R) +
-        Math.cos(latRad) * Math.sin(distanceKm / R) * Math.cos(bearingRad),
-    );
-
-    const newLngRad =
-      lngRad +
-      Math.atan2(
-        Math.sin(bearingRad) * Math.sin(distanceKm / R) * Math.cos(latRad),
-        Math.cos(distanceKm / R) - Math.sin(latRad) * Math.sin(newLatRad),
-      );
-
-    return {
-      lat: newLatRad * (180 / Math.PI),
-      lng: newLngRad * (180 / Math.PI),
-    };
-  }
-
-  private async addEstimates(
-    drivers: DriverWithDistance[],
-    userLat: number,
-    userLng: number,
-  ): Promise<DriverWithDistance[]> {
-    return Promise.all(
-      drivers.map(async (driver) => {
-        try {
-          const route = await this.calculateRoute({
-            origin: {
-              latitude: driver.latitude,
-              longitude: driver.longitude,
-            },
-            destination: { latitude: userLat, longitude: userLng },
-          });
-
-          const estimatedTime = Math.ceil(route.duration / 60);
-          const estimatedPrice = this.calculateBasePrice({
-            distance: route.distance,
-            duration: route.duration,
-          });
-
-          return {
-            ...driver,
-            estimatedTime,
-            estimatedPrice,
-          };
-        } catch (error) {
-          this.logger.warn(
-            `Erro ao calcular rota para motorista ${driver.id}:`,
-            error,
-          );
-          const distance =
-            driver.distance ||
-            this.calculateDistance(
-              driver.latitude,
-              driver.longitude,
-              userLat,
-              userLng,
-            );
-          const estimatedTime = Math.ceil((distance / 40) * 60);
-          const estimatedPrice = this.calculateBasePrice({
-            distance: distance * 1000,
-            duration: estimatedTime * 60,
-          });
-
-          return {
-            ...driver,
-            estimatedTime,
-            estimatedPrice,
-          };
-        }
-      }),
-    );
-  }
-
-  async calculatePriceForRideType(
-    rideTypeId: string,
-    distance: number,
-    duration: number,
-    surgeMultiplier = 1.0,
-    isPremiumTime = false,
-  ): Promise<{
-    finalPrice: number;
-    breakdown: any;
-  }> {
-    try {
-      const rideType = await this.prisma.rideTypeConfig.findUnique({
-        where: { id: rideTypeId },
-      });
-
-      if (!rideType) {
-        return {
-          finalPrice: this.calculateBasePrice({ distance, duration }),
-          breakdown: {
-            error: 'Tipo de corrida não encontrado, usando cálculo padrão',
-          },
-        };
-      }
-
-      const distanceKm = distance / 1000;
-      const durationMinutes = duration / 60;
-
-      const baseCost = rideType.basePrice;
-      const distanceCost = distanceKm * rideType.pricePerKm;
-      const timeCost = durationMinutes * rideType.pricePerMinute;
-
-      let subtotal = baseCost + distanceCost + timeCost;
-
-      const appliedSurge = Math.max(surgeMultiplier, rideType.surgeMultiplier);
-      subtotal *= appliedSurge;
-
-      const premiumFee = isPremiumTime ? subtotal * 0.15 : 0;
-
-      const finalPrice = Math.max(
-        subtotal + premiumFee,
-        rideType.minimumPrice * appliedSurge,
-      );
-
-      return {
-        finalPrice: Math.round(finalPrice * 100) / 100,
-        breakdown: {
-          rideType: rideType.name,
-          basePrice: rideType.basePrice,
-          distanceCost: Math.round(distanceCost * 100) / 100,
-          timeCost: Math.round(timeCost * 100) / 100,
-          surgeMultiplier: appliedSurge,
-          premiumFee: Math.round(premiumFee * 100) / 100,
-          minimumPrice: rideType.minimumPrice,
-          distance: distanceKm,
-          duration: durationMinutes,
-          isPremiumTime,
-        },
-      };
-    } catch (error) {
-      this.logger.error('Erro ao calcular preço por tipo:', error);
-      return {
-        finalPrice: this.calculateBasePrice({ distance, duration }),
-        breakdown: {
-          error: 'Erro no cálculo, usando preço padrão',
-        },
-      };
+      return [];
     }
   }
 
@@ -713,6 +926,84 @@ export class MapsService {
         duration,
       };
     }
+  }
+
+  calculateBasePrice(request: CalculatePriceRequest): number {
+    const {
+      distance,
+      duration,
+      vehicleType = 'ECONOMY',
+      surgeMultiplier = 1,
+    } = request;
+
+    const baseRates: BaseRates = {
+      ECONOMY: { base: 8.0, perKm: 2.5, perMinute: 0.5 },
+      COMFORT: { base: 12.0, perKm: 3.0, perMinute: 0.6 },
+      LUXURY: { base: 18.0, perKm: 4.0, perMinute: 0.8 },
+      SUV: { base: 15.0, perKm: 3.5, perMinute: 0.7 },
+      VAN: { base: 20.0, perKm: 4.5, perMinute: 0.9 },
+    };
+
+    const rates = baseRates[vehicleType] || baseRates.ECONOMY;
+
+    const distanceKm = distance / 1000;
+    const durationMinutes = duration / 60;
+
+    let price =
+      rates.base + distanceKm * rates.perKm + durationMinutes * rates.perMinute;
+
+    price *= surgeMultiplier;
+
+    const minimumPrice = rates.base * 1.5;
+    price = Math.max(price, minimumPrice);
+
+    return Math.round(price * 100) / 100;
+  }
+
+  async reverseGeocode(latitude: number, longitude: number): Promise<string> {
+    if (!this.googleApiKey) {
+      this.logger.warn('Google API Key não configurada para geocodificação');
+      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+    }
+
+    try {
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${this.googleApiKey}&language=pt-BR`;
+
+      const response = await fetch(url);
+      const data = (await response.json()) as GoogleGeocodeApiResponse;
+
+      if (data.status === 'OK' && data.results.length > 0) {
+        return data.results[0].formatted_address;
+      }
+
+      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+    } catch (error) {
+      this.logger.warn('Erro na geocodificação reversa:', error);
+      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+    }
+  }
+
+  private calculateDistance(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number {
+    const R = 6371;
+    const dLat = this.deg2rad(lat2 - lat1);
+    const dLon = this.deg2rad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.deg2rad(lat1)) *
+        Math.cos(this.deg2rad(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  private deg2rad(deg: number): number {
+    return deg * (Math.PI / 180);
   }
 
   private async calculateRouteWithRoutesAPI(
@@ -842,83 +1133,5 @@ export class MapsService {
       duration: leg.duration.value,
       polyline: route.overview_polyline?.points,
     };
-  }
-
-  calculateBasePrice(request: CalculatePriceRequest): number {
-    const {
-      distance,
-      duration,
-      vehicleType = 'ECONOMY',
-      surgeMultiplier = 1,
-    } = request;
-
-    const baseRates: BaseRates = {
-      ECONOMY: { base: 8.0, perKm: 2.5, perMinute: 0.5 },
-      COMFORT: { base: 12.0, perKm: 3.0, perMinute: 0.6 },
-      LUXURY: { base: 18.0, perKm: 4.0, perMinute: 0.8 },
-      SUV: { base: 15.0, perKm: 3.5, perMinute: 0.7 },
-      VAN: { base: 20.0, perKm: 4.5, perMinute: 0.9 },
-    };
-
-    const rates = baseRates[vehicleType] || baseRates.ECONOMY;
-
-    const distanceKm = distance / 1000;
-    const durationMinutes = duration / 60;
-
-    let price =
-      rates.base + distanceKm * rates.perKm + durationMinutes * rates.perMinute;
-
-    price *= surgeMultiplier;
-
-    const minimumPrice = rates.base * 1.5;
-    price = Math.max(price, minimumPrice);
-
-    return Math.round(price * 100) / 100;
-  }
-
-  async reverseGeocode(latitude: number, longitude: number): Promise<string> {
-    if (!this.googleApiKey) {
-      this.logger.warn('Google API Key não configurada para geocodificação');
-      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    }
-
-    try {
-      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${this.googleApiKey}&language=pt-BR`;
-
-      const response = await fetch(url);
-      const data = (await response.json()) as GoogleGeocodeApiResponse;
-
-      if (data.status === 'OK' && data.results.length > 0) {
-        return data.results[0].formatted_address;
-      }
-
-      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    } catch (error) {
-      this.logger.warn('Erro na geocodificação reversa:', error);
-      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    }
-  }
-
-  private calculateDistance(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number,
-  ): number {
-    const R = 6371;
-    const dLat = this.deg2rad(lat2 - lat1);
-    const dLon = this.deg2rad(lon2 - lon1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.deg2rad(lat1)) *
-        Math.cos(this.deg2rad(lat2)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private deg2rad(deg: number): number {
-    return deg * (Math.PI / 180);
   }
 }

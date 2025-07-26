@@ -21,7 +21,10 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
-    "db:seed:ride-types": "tsx prisma/seed-ride-types.ts"
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

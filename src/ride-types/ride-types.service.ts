@@ -15,7 +15,97 @@ import {
   RidePriceCalculationResponse,
   AvailableDriversResponse,
 } from './dto';
-import { RideTypeEnum, Gender, VehicleType } from '@prisma/client';
+import {
+  RideTypeEnum,
+  Gender,
+  VehicleType,
+  DocumentType,
+} from '@prisma/client';
+
+interface RideTypeAvailability {
+  count: number;
+  averageEta: number;
+  hasAvailableDrivers: boolean;
+  nearestDriver?: any;
+}
+
+interface RideTypeSuggestion {
+  id: string;
+  type: RideTypeEnum;
+  name: string;
+  description: string;
+  icon: string;
+  isActive: boolean;
+  femaleOnly: boolean;
+  requiresArmored: boolean;
+  requiresPetFriendly: boolean;
+  allowMotorcycle: boolean;
+  isDeliveryOnly: boolean;
+  vehicleTypes: VehicleType[];
+  basePrice: number;
+  pricePerKm: number;
+  pricePerMinute: number;
+  surgeMultiplier: number;
+  minimumPrice: number;
+  maxDistance?: number;
+  minDistance?: number;
+  priority: number;
+  availability: RideTypeAvailability;
+  estimatedPrice?: number;
+  estimatedArrival: number;
+  isRecommended?: boolean;
+  reason?: string;
+}
+
+interface RideTypeRequirements {
+  requiresPetFriendly: boolean;
+  allowMotorcycle: boolean;
+  isDeliveryOnly: boolean;
+  maxDistance: number | null;
+  minDistance: number | null;
+  priority: number;
+  requiresArmored: boolean;
+}
+
+interface DriverWithRelations {
+  id: string;
+  userId: string;
+  user?: {
+    id: string;
+    gender: Gender;
+  };
+  vehicle?: {
+    id: string;
+    vehicleType: VehicleType;
+    isArmored: boolean;
+    isPetFriendly: boolean;
+    isMotorcycle: boolean;
+  } | null;
+}
+
+interface RideTypeConfig {
+  id: string;
+  type: RideTypeEnum;
+  name: string;
+  description: string;
+  icon: string;
+  isActive: boolean;
+  femaleOnly: boolean;
+  requiresArmored: boolean;
+  requiresPetFriendly: boolean;
+  allowMotorcycle: boolean;
+  isDeliveryOnly: boolean;
+  vehicleTypes: VehicleType[];
+  basePrice: number;
+  pricePerKm: number;
+  pricePerMinute: number;
+  surgeMultiplier: number;
+  minimumPrice: number;
+  maxDistance?: number;
+  minDistance?: number;
+  priority: number;
+  availability?: RideTypeAvailability;
+}
 
 @Injectable()
 export class RideTypesService {
@@ -23,7 +113,7 @@ export class RideTypesService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async createRideType(createRideTypeDto: CreateRideTypeDto) {
+  async createRideType(createRideTypeDto: CreateRideTypeDto): Promise<any> {
     const existingType = await this.prisma.rideTypeConfig.findUnique({
       where: { type: createRideTypeDto.type },
     });
@@ -34,6 +124,8 @@ export class RideTypesService {
       );
     }
 
+    const requirements = this.getRideTypeRequirements(createRideTypeDto.type);
+
     return this.prisma.rideTypeConfig.create({
       data: {
         type: createRideTypeDto.type,
@@ -42,24 +134,33 @@ export class RideTypesService {
         icon: createRideTypeDto.icon,
         isActive: createRideTypeDto.isActive ?? true,
         femaleOnly: createRideTypeDto.femaleOnly ?? false,
-        requiresArmored: createRideTypeDto.requiresArmored ?? false,
+
+        requiresArmored: requirements.requiresArmored,
+        requiresPetFriendly: requirements.requiresPetFriendly,
+        allowMotorcycle: requirements.allowMotorcycle,
+        isDeliveryOnly: requirements.isDeliveryOnly,
+
         vehicleTypes: createRideTypeDto.vehicleTypes,
         basePrice: createRideTypeDto.basePrice,
         pricePerKm: createRideTypeDto.pricePerKm,
-        pricePerMinute: createRideTypeDto.pricePerMinute,
+        pricePerMin: createRideTypeDto.pricePerMinute,
         surgeMultiplier: createRideTypeDto.surgeMultiplier ?? 1.0,
         minimumPrice: createRideTypeDto.minimumPrice,
+        maxDistance: createRideTypeDto.maxDistance,
+        minDistance: createRideTypeDto.minDistance,
+        priority: createRideTypeDto.priority ?? requirements.priority,
       },
     });
   }
-
-  async findAllRideTypes() {
+  async findAllRideTypes(): Promise<any[]> {
     return this.prisma.rideTypeConfig.findMany({
-      orderBy: [{ type: 'asc' }],
+      orderBy: [{ priority: 'asc' }, { basePrice: 'asc' }],
     });
   }
 
-  async findAvailableRideTypes(query: GetAvailableRideTypesDto) {
+  async findAvailableRideTypes(
+    query: GetAvailableRideTypesDto,
+  ): Promise<any[]> {
     const { userGender, activeOnly = true, includeDelivery = false } = query;
 
     const whereConditions: any = {};
@@ -73,14 +174,12 @@ export class RideTypesService {
     }
 
     if (!includeDelivery) {
-      whereConditions.NOT = {
-        type: RideTypeEnum.DELIVERY,
-      };
+      whereConditions.isDeliveryOnly = false;
     }
 
     const rideTypes = await this.prisma.rideTypeConfig.findMany({
       where: whereConditions,
-      orderBy: [{ basePrice: 'asc' }],
+      orderBy: [{ priority: 'asc' }, { basePrice: 'asc' }],
     });
 
     const rideTypesWithAvailability = await Promise.all(
@@ -99,7 +198,7 @@ export class RideTypesService {
     return rideTypesWithAvailability;
   }
 
-  async findRideTypeById(id: string) {
+  async findRideTypeById(id: string): Promise<any> {
     const rideType = await this.prisma.rideTypeConfig.findUnique({
       where: { id },
     });
@@ -113,7 +212,7 @@ export class RideTypesService {
     return rideType;
   }
 
-  async findRideTypeByType(type: RideTypeEnum) {
+  async findRideTypeByType(type: RideTypeEnum): Promise<any> {
     const rideType = await this.prisma.rideTypeConfig.findUnique({
       where: { type },
     });
@@ -125,8 +224,11 @@ export class RideTypesService {
     return rideType;
   }
 
-  async updateRideType(id: string, updateRideTypeDto: UpdateRideTypeDto) {
-    const existingType = await this.findRideTypeById(id);
+  async updateRideType(
+    id: string,
+    updateRideTypeDto: UpdateRideTypeDto,
+  ): Promise<any> {
+    await this.findRideTypeById(id);
 
     return this.prisma.rideTypeConfig.update({
       where: { id },
@@ -134,8 +236,8 @@ export class RideTypesService {
     });
   }
 
-  async deleteRideType(id: string) {
-    const existingType = await this.findRideTypeById(id);
+  async deleteRideType(id: string): Promise<any> {
+    await this.findRideTypeById(id);
 
     const ridesUsingType = await this.prisma.ride.count({
       where: { rideTypeConfigId: id },
@@ -163,6 +265,18 @@ export class RideTypesService {
       surgeMultiplier = 1.0,
       isPremiumTime = false,
     } = calculateDto;
+
+    if (rideType.maxDistance && distance > rideType.maxDistance) {
+      throw new BadRequestException(
+        `Distância ${(distance / 1000).toFixed(1)}km excede o máximo permitido de ${(rideType.maxDistance / 1000).toFixed(1)}km para ${rideType.name}`,
+      );
+    }
+
+    if (rideType.minDistance && distance < rideType.minDistance) {
+      throw new BadRequestException(
+        `Distância ${(distance / 1000).toFixed(1)}km é menor que o mínimo permitido de ${(rideType.minDistance / 1000).toFixed(1)}km para ${rideType.name}`,
+      );
+    }
 
     const distanceKm = distance / 1000;
     const durationMinutes = duration / 60;
@@ -200,12 +314,17 @@ export class RideTypesService {
     };
   }
 
-  async addDriverRideType(addDriverRideTypeDto: AddDriverRideTypeDto) {
+  async addDriverRideType(
+    addDriverRideTypeDto: AddDriverRideTypeDto,
+  ): Promise<any> {
     const { driverId, rideTypeId, isActive = true } = addDriverRideTypeDto;
 
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: { vehicle: true },
+      include: {
+        user: true,
+        vehicle: true,
+      },
     });
 
     if (!driver) {
@@ -251,10 +370,13 @@ export class RideTypesService {
   async updateDriverRideTypes(
     driverId: string,
     updateDto: UpdateDriverRideTypesDto,
-  ) {
+  ): Promise<any> {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: { vehicle: true },
+      include: {
+        user: true,
+        vehicle: true,
+      },
     });
 
     if (!driver) {
@@ -268,15 +390,20 @@ export class RideTypesService {
     });
 
     const validRideTypes: string[] = [];
-    for (const rideTypeId of updateDto.rideTypeIds) {
-      const rideType = await this.findRideTypeById(rideTypeId);
+    const skippedTypes: Array<{ rideTypeId: string; reason: string }> = [];
 
+    for (const rideTypeId of updateDto.rideTypeIds) {
       try {
+        const rideType = await this.findRideTypeById(rideTypeId);
         await this.validateDriverForRideType(driver, rideType);
         validRideTypes.push(rideTypeId);
       } catch (error) {
+        skippedTypes.push({
+          rideTypeId,
+          reason: error.message,
+        });
         this.logger.warn(
-          `Motorista ${driverId} não atende requisitos para tipo ${rideType.name}: ${error.message}`,
+          `Motorista ${driverId} não atende requisitos para tipo ${rideTypeId}: ${error.message}`,
         );
       }
     }
@@ -289,6 +416,9 @@ export class RideTypesService {
             rideTypeId,
             isActive: true,
           },
+          include: {
+            rideType: true,
+          },
         }),
       ),
     );
@@ -296,12 +426,13 @@ export class RideTypesService {
     return {
       success: true,
       addedTypes: associations.length,
-      skippedTypes: updateDto.rideTypeIds.length - associations.length,
+      skippedTypes: skippedTypes.length,
       associations,
+      skippedDetails: skippedTypes,
     };
   }
 
-  async getDriverRideTypes(driverId: string) {
+  async getDriverRideTypes(driverId: string): Promise<any[]> {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
     });
@@ -319,13 +450,16 @@ export class RideTypesService {
       },
       orderBy: {
         rideType: {
-          basePrice: 'asc',
+          priority: 'asc',
         },
       },
     });
   }
 
-  async removeDriverRideType(driverId: string, rideTypeId: string) {
+  async removeDriverRideType(
+    driverId: string,
+    rideTypeId: string,
+  ): Promise<any> {
     const association = await this.prisma.driverRideType.findUnique({
       where: {
         driverId_rideTypeId: {
@@ -349,21 +483,96 @@ export class RideTypesService {
     });
   }
 
-  private async validateDriverForRideType(driver: any, rideType: any) {
-    if (rideType.femaleOnly) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: driver.userId },
-      });
+  async getSuggestedRideTypes(
+    userGender: Gender,
+    latitude: number,
+    longitude: number,
+    isDelivery = false,
+    hasPets = false,
+  ): Promise<RideTypeSuggestion[]> {
+    const availableTypes = await this.findAvailableRideTypes({
+      userGender,
+      activeOnly: true,
+      includeDelivery: isDelivery,
+    });
 
-      if (user?.gender !== Gender.FEMALE) {
-        throw new BadRequestException(
-          'Apenas motoristas do gênero feminino podem oferecer corridas exclusivas para mulheres',
+    const filteredTypes = availableTypes.filter((type) => {
+      if (isDelivery) {
+        return type.isDeliveryOnly;
+      }
+
+      if (type.isDeliveryOnly) {
+        return false;
+      }
+
+      if (hasPets && !type.requiresPetFriendly) {
+        return (
+          type.type === RideTypeEnum.NORMAL ||
+          type.type === RideTypeEnum.EXECUTIVO
         );
       }
+
+      return true;
+    });
+
+    const suggestions: RideTypeSuggestion[] = filteredTypes
+      .filter((type) => type.availability.hasAvailableDrivers)
+      .map((type) => ({
+        ...type,
+        priority: this.calculateTypePriority(
+          type,
+          userGender,
+          isDelivery,
+          hasPets,
+        ),
+        estimatedArrival: type.availability.averageEta,
+        isRecommended: false,
+        reason: this.getRecommendationReason(
+          type,
+          userGender,
+          isDelivery,
+          hasPets,
+        ),
+      }))
+      .sort((a, b) => b.priority - a.priority);
+
+    if (suggestions.length > 0) {
+      suggestions[0].isRecommended = true;
+
+      if (hasPets) {
+        const petType = suggestions.find((s) => s.type === RideTypeEnum.PET);
+        if (petType) {
+          petType.isRecommended = true;
+          suggestions[0].isRecommended = false;
+        }
+      }
+    }
+
+    return suggestions;
+  }
+
+  private async validateDriverForRideType(
+    driver: DriverWithRelations,
+    rideType: RideTypeConfig,
+  ): Promise<void> {
+    if (rideType.femaleOnly && driver.user?.gender !== Gender.FEMALE) {
+      throw new BadRequestException(
+        'Apenas motoristas do gênero feminino podem oferecer corridas exclusivas para mulheres',
+      );
     }
 
     if (rideType.requiresArmored && !driver.vehicle?.isArmored) {
       throw new BadRequestException('Tipo de corrida requer veículo blindado');
+    }
+
+    if (rideType.requiresPetFriendly && !driver.vehicle?.isPetFriendly) {
+      throw new BadRequestException(
+        'Tipo de corrida requer veículo pet-friendly',
+      );
+    }
+
+    if (rideType.type === RideTypeEnum.MOTO && !driver.vehicle?.isMotorcycle) {
+      throw new BadRequestException('Tipo de corrida requer motocicleta');
     }
 
     if (
@@ -375,42 +584,66 @@ export class RideTypesService {
       );
     }
 
-    if (rideType.vehicleTypes.includes(VehicleType.MOTORCYCLE)) {
-      const hasMotorcycleLicense = await this.prisma.driverDocument.findFirst({
-        where: {
-          driverId: driver.id,
-          documentType: 'MOTORCYCLE_LICENSE',
-          isVerified: true,
-        },
-      });
+    await this.validateDriverDocumentation(driver, rideType);
+  }
 
-      if (!hasMotorcycleLicense) {
-        throw new BadRequestException(
-          'Motorista precisa ter habilitação para motocicleta verificada',
+  private async validateDriverDocumentation(
+    driver: DriverWithRelations,
+    rideType: RideTypeConfig,
+  ): Promise<void> {
+    switch (rideType.type) {
+      case RideTypeEnum.MOTO: {
+        const hasMotorcycleLicense = await this.prisma.driverDocument.findFirst(
+          {
+            where: {
+              driverId: driver.id,
+              documentType: DocumentType.MOTORCYCLE_LICENSE,
+              isVerified: true,
+            },
+          },
         );
+        if (!hasMotorcycleLicense) {
+          throw new BadRequestException(
+            'Motorista precisa ter habilitação para motocicleta verificada',
+          );
+        }
+        break;
       }
-    }
 
-    if (rideType.requiresArmored) {
-      const hasArmoredCertificate = await this.prisma.driverDocument.findFirst({
-        where: {
-          driverId: driver.id,
-          documentType: 'ARMORED_VEHICLE_CERTIFICATE',
-          isVerified: true,
-        },
-      });
+      case RideTypeEnum.BLINDADO: {
+        const hasArmoredCertificate =
+          await this.prisma.driverDocument.findFirst({
+            where: {
+              driverId: driver.id,
+              documentType: DocumentType.ARMORED_VEHICLE_CERTIFICATE,
+              isVerified: true,
+            },
+          });
+        if (!hasArmoredCertificate) {
+          throw new BadRequestException(
+            'Motorista precisa ter certificado para veículos blindados',
+          );
+        }
+        break;
+      }
 
-      if (!hasArmoredCertificate) {
-        throw new BadRequestException(
-          'Motorista precisa ter certificado para veículos blindados',
-        );
+      case RideTypeEnum.PET: {
+        // Certificado pet não é obrigatório, mas recomendado
+        // const hasPetCertificate = await this.prisma.driverDocument.findFirst({
+        //   where: {
+        //     driverId: driver.id,
+        //     documentType: DocumentType.PET_TRANSPORT_CERTIFICATE,
+        //     isVerified: true,
+        //   },
+        // });
+        break;
       }
     }
   }
 
   private async checkDriverAvailability(
     rideTypeId: string,
-    userGender?: Gender,
+    _userGender?: Gender,
   ): Promise<AvailableDriversResponse> {
     const rideType = await this.findRideTypeById(rideTypeId);
 
@@ -418,7 +651,7 @@ export class RideTypesService {
       isOnline: true,
       isAvailable: true,
       accountStatus: 'APPROVED',
-      supportedRideTypes: {
+      driverRideTypes: {
         some: {
           rideTypeId,
           isActive: true,
@@ -438,17 +671,31 @@ export class RideTypesService {
       };
     }
 
+    if (rideType.requiresPetFriendly) {
+      if (driverFilters.vehicle) {
+        driverFilters.vehicle.isPetFriendly = true;
+      } else {
+        driverFilters.vehicle = { isPetFriendly: true };
+      }
+    }
+
     const availableDrivers = await this.prisma.driver.findMany({
       where: driverFilters,
       select: {
         id: true,
         currentLatitude: true,
         currentLongitude: true,
+        averageRating: true,
       },
     });
 
-    const averageEta =
-      availableDrivers.length > 0 ? Math.round(5 + Math.random() * 10) : 0;
+    let averageEta = 0;
+    if (availableDrivers.length > 0) {
+      averageEta = this.calculateAverageEta(
+        availableDrivers.length,
+        rideType.type,
+      );
+    }
 
     return {
       count: availableDrivers.length,
@@ -457,61 +704,139 @@ export class RideTypesService {
     };
   }
 
-  async getSuggestedRideTypes(
-    userGender: Gender,
-    latitude: number,
-    longitude: number,
-    isDelivery = false,
-  ) {
-    const availableTypes = await this.findAvailableRideTypes({
-      userGender,
-      activeOnly: true,
-      includeDelivery: isDelivery,
-    });
-
-    const suggestions = availableTypes
-      .filter((type) => type.availability.hasAvailableDrivers)
-      .map((type) => ({
-        ...type,
-        priority: this.calculateTypePriority(type, userGender, isDelivery),
-        estimatedArrival: type.availability.averageEta,
-      }))
-      .sort((a, b) => b.priority - a.priority);
-
-    return suggestions;
-  }
-
   private calculateTypePriority(
-    rideType: any,
+    rideType: RideTypeConfig,
     userGender: Gender,
     isDelivery: boolean,
+    hasPets: boolean,
   ): number {
-    let priority = 0;
+    let priority = rideType.priority || 0;
 
-    const typePriorities = {
-      [RideTypeEnum.STANDARD]: 10,
-      [RideTypeEnum.FEMALE_ONLY]: userGender === Gender.FEMALE ? 15 : 0,
-      [RideTypeEnum.LUXURY]: 8,
-      [RideTypeEnum.ARMORED]: 6,
-      [RideTypeEnum.DELIVERY]: isDelivery ? 20 : 5,
-      [RideTypeEnum.MOTORCYCLE]: 12,
-      [RideTypeEnum.EXPRESS]: 11,
-      [RideTypeEnum.SCHEDULED]: 7,
-      [RideTypeEnum.SHARED]: 9,
-    };
+    if (isDelivery && rideType.isDeliveryOnly) {
+      priority += 20;
+    }
 
-    priority += typePriorities[rideType.type] || 5;
+    if (hasPets && rideType.requiresPetFriendly) {
+      priority += 15;
+    }
 
-    priority += Math.min(rideType.availability.count * 2, 10);
+    if (userGender === Gender.FEMALE && rideType.femaleOnly) {
+      priority += 10;
+    }
+
+    if (rideType.availability) {
+      priority += Math.min(rideType.availability.count * 2, 10);
+
+      if (rideType.availability.averageEta < 8) {
+        priority += 3;
+      }
+    }
 
     if (rideType.basePrice > 20) {
       priority -= 5;
     }
 
-    if (rideType.availability.averageEta < 8) {
-      priority += 3;
+    return priority;
+  }
+
+  private getRecommendationReason(
+    rideType: RideTypeConfig,
+    userGender: Gender,
+    isDelivery: boolean,
+    hasPets: boolean,
+  ): string {
+    if (isDelivery && rideType.isDeliveryOnly) {
+      return 'Ideal para entregas';
     }
 
-    return priority;
+    if (hasPets && rideType.requiresPetFriendly) {
+      return 'Veículo preparado para pets';
+    }
+
+    if (userGender === Gender.FEMALE && rideType.femaleOnly) {
+      return 'Exclusivo para mulheres';
+    }
+
+    if (rideType.type === RideTypeEnum.NORMAL) {
+      return 'Melhor custo-benefício';
+    }
+
+    if (rideType.type === RideTypeEnum.MOTO) {
+      return 'Mais rápido no trânsito';
+    }
+
+    return 'Disponível agora';
+  }
+
+  private calculateAverageEta(
+    driverCount: number,
+    rideType: RideTypeEnum,
+  ): number {
+    let baseEta = 8;
+
+    if (driverCount > 10) {
+      baseEta = 5;
+    } else if (driverCount > 5) {
+      baseEta = 6;
+    } else if (driverCount < 3) {
+      baseEta = 12;
+    }
+
+    switch (rideType) {
+      case RideTypeEnum.MOTO:
+        baseEta = Math.max(3, baseEta - 3);
+        break;
+      case RideTypeEnum.BLINDADO:
+        baseEta += 5;
+        break;
+      case RideTypeEnum.PET:
+        baseEta += 2;
+        break;
+    }
+
+    return Math.round(baseEta);
+  }
+
+  private getRideTypeRequirements(type: RideTypeEnum): RideTypeRequirements {
+    const requirements: RideTypeRequirements = {
+      requiresArmored: false,
+      requiresPetFriendly: false,
+      allowMotorcycle: false,
+      isDeliveryOnly: false,
+      maxDistance: null,
+      minDistance: null,
+      priority: 0,
+    };
+
+    switch (type) {
+      case RideTypeEnum.NORMAL:
+        requirements.priority = 1;
+        break;
+      case RideTypeEnum.EXECUTIVO:
+        requirements.priority = 2;
+        break;
+      case RideTypeEnum.MULHER:
+        requirements.priority = 3;
+        break;
+      case RideTypeEnum.PET:
+        requirements.requiresPetFriendly = true;
+        requirements.priority = 4;
+        break;
+      case RideTypeEnum.MOTO:
+        requirements.allowMotorcycle = true;
+        requirements.maxDistance = 15000;
+        requirements.priority = 5;
+        break;
+      case RideTypeEnum.BLINDADO:
+        requirements.priority = 6;
+        break;
+      case RideTypeEnum.DELIVERY:
+        requirements.isDeliveryOnly = true;
+        requirements.allowMotorcycle = true;
+        requirements.priority = 7;
+        break;
+    }
+
+    return requirements;
   }
 }

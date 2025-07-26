@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -17,19 +18,23 @@ import { RideTypesModule } from './ride-types/ride-types.module';
 
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env.local', '.env'],
+    }),
     PrismaModule,
+    AuthModule,
     UsersModule,
     DriversModule,
     PassengersModule,
     VehiclesModule,
+    RideTypesModule,
     RidesModule,
+    MapsModule,
     PaymentsModule,
     RatingsModule,
     DocumentsModule,
-    AuthModule,
     NotificationsModule,
-    MapsModule,
-    RideTypesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

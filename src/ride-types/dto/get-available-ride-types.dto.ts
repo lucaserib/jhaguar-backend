@@ -30,4 +30,13 @@ export class GetAvailableRideTypesDto {
   @IsOptional()
   @IsBoolean()
   includeDelivery?: boolean;
+
+  @ApiProperty({
+    description: 'Se o usuário tem pets',
+    example: false,
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  hasPets?: boolean;
 }
