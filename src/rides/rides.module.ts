@@ -3,9 +3,10 @@ import { RidesController } from './rides.controller';
 import { RidesService } from './rides.service';
 import { MapsModule } from '../maps/maps.module';
 import { RideTypesModule } from '../ride-types/ride-types.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 @Module({
-  imports: [MapsModule, RideTypesModule],
+  imports: [MapsModule, RideTypesModule, PaymentsModule],
   controllers: [RidesController],
   providers: [RidesService],
   exports: [RidesService],

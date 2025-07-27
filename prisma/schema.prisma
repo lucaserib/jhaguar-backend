@@ -26,6 +26,9 @@ model User {
   driver       Driver?
   passenger    Passenger?
   ratings      Rating[]
+
+  wallet      UserWallet?
+  Transaction Transaction[]
 }
 
 enum Gender {
@@ -227,6 +230,8 @@ model Ride {
   updatedAt            DateTime        @updatedAt
   RideTypeConfig       RideTypeConfig? @relation(fields: [rideTypeConfigId], references: [id])
 
+  Transaction Transaction[]
+
   @@index([status])
   @@index([passengerId])
   @@index([driverId])
@@ -250,18 +255,110 @@ enum PaymentStatus {
 }
 
 model Payment {
-  id               String        @id @default(uuid())
-  rideId           String        @unique
-  amount           Float
-  currency         String        @default("BRL")
-  status           PaymentStatus @default(PENDING)
-  paymentMethod    String
+  id       String        @id @default(uuid())
+  rideId   String        @unique
+  amount   Float
+  currency String        @default("BRL")
+  method   PaymentMethod @default(CASH) // NOVO CAMPO
+  status   PaymentStatus @default(PENDING)
+
+  // Dados do Stripe (quando aplicável)
   paymentIntentId  String?
   stripeCustomerId String?
   receiptUrl       String?
-  ride             Ride          @relation(fields: [rideId], references: [id])
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+
+  // NOVOS CAMPOS para confirmação presencial
+  confirmedByDriver      Boolean   @default(false)
+  driverConfirmationTime DateTime?
+  driverNotes            String?
+
+  // Dados da transação de carteira (quando aplicável)
+  transactionId String?
+
+  ride      Ride     @relation(fields: [rideId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([method])
+  @@index([status])
+}
+
+enum PaymentMethod {
+  CASH
+  PIX
+  CARD_MACHINE
+  WALLET_BALANCE
+  CREDIT_CARD
+  DEBIT_CARD
+  PIX_WALLET
+}
+
+enum TransactionType {
+  WALLET_TOPUP
+  RIDE_PAYMENT
+  REFUND
+  WITHDRAWAL
+  CANCELLATION_FEE
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLLED
+  REFUNDED
+}
+
+model UserWallet {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  balance     Float    @default(0.00)
+  currency    String   @default("BRL")
+  isBlocked   Boolean  @default(false)
+  blockReason String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id          String            @id @default(uuid())
+  walletId    String?
+  userId      String
+  rideId      String?
+  type        TransactionType
+  status      TransactionStatus @default(PENDING)
+  amount      Float
+  currency    String            @default("BRL")
+  description String
+
+  // Dados do Stripe
+  stripePaymentIntentId String?
+  stripeChargeId        String?
+  stripeCustomerId      String?
+
+  // Metadados
+  metadata      Json?
+  failureReason String?
+  processedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallet UserWallet? @relation(fields: [walletId], references: [id])
+  user   User        @relation(fields: [userId], references: [id])
+  ride   Ride?       @relation(fields: [rideId], references: [id])
+
+  @@index([userId])
+  @@index([walletId])
+  @@index([rideId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Rating {

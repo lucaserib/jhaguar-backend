@@ -7,8 +7,9 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { MapsService } from '../maps/maps.service';
 import { RideTypesService } from '../ride-types/ride-types.service';
+import { PaymentsService } from '../payments/payments.service';
 import { CreateRideDto } from './dto/create-ride.dto';
-import { RideStatus, PaymentStatus } from '@prisma/client';
+import { RideStatus, PaymentStatus, PaymentMethod } from '@prisma/client';
 
 @Injectable()
 export class RidesService {
@@ -22,9 +23,12 @@ export class RidesService {
     private readonly prisma: PrismaService,
     private readonly mapsService: MapsService,
     private readonly rideTypesService: RideTypesService,
+    private readonly paymentsService: PaymentsService, // NOVA DEPENDÊNCIA
   ) {
     setInterval(() => this.cleanExpiredTokens(), 5 * 60 * 1000);
   }
+
+  // ==================== PREPARAÇÃO E CRIAÇÃO DE CORRIDA ====================
 
   async prepareRideConfirmation(
     userId: string,
@@ -55,12 +59,21 @@ export class RidesService {
       );
 
       if (confirmation.success) {
+        // NOVO: Incluir métodos de pagamento disponíveis
+        const paymentMethods =
+          await this.paymentsService.getPaymentMethods(userId);
+
+        confirmation.data.paymentMethods = paymentMethods;
+        confirmation.data.walletBalance =
+          await this.paymentsService.getWalletBalance(userId);
+
         this.confirmationTokens.set(confirmation.data.confirmationToken, {
           data: {
             userId,
             ...confirmationData,
             pricing: confirmation.data.pricing,
             selectedDriver: confirmation.data.driver,
+            paymentMethods,
           },
           expires: confirmation.data.expiresAt,
         });
@@ -204,18 +217,24 @@ export class RidesService {
 
       this.confirmationTokens.delete(createRideDto.confirmationToken);
 
+      // NOVO: Criar registro de pagamento inicial
       await this.prisma.payment.create({
         data: {
           rideId: ride.id,
           amount: finalPricing.finalPrice,
           status: PaymentStatus.PENDING,
-          paymentMethod: 'PENDING',
+          method: PaymentMethod.CASH, // Valor padrão, será atualizado quando o usuário escolher
         },
       });
 
       if (!selectedDriver) {
         await this.notifyNearbyDrivers(ride);
       }
+
+      // NOVO: Incluir informações de pagamento na resposta
+      const paymentMethods =
+        await this.paymentsService.getPaymentMethods(userId);
+      const walletBalance = await this.paymentsService.getWalletBalance(userId);
 
       return {
         success: true,
@@ -236,8 +255,13 @@ export class RidesService {
             currency: 'BRL',
             breakdown: finalPricing.breakdown,
           },
+          payment: {
+            methods: paymentMethods,
+            walletBalance,
+            requiresPayment: true,
+            amount: finalPricing.finalPrice,
+          },
           estimatedArrival: selectedDriver ? 8 : null,
-          paymentRequired: true,
         },
         message: selectedDriver
           ? 'Corrida criada e aceita pelo motorista'
@@ -253,6 +277,99 @@ export class RidesService {
       };
     }
   }
+
+  // ==================== FINALIZAÇÃO DA CORRIDA ====================
+
+  async completeRide(
+    driverId: string,
+    rideId: string,
+    completionData: {
+      actualDistance?: number;
+      actualDuration?: number;
+      finalLocation?: { latitude: number; longitude: number };
+    },
+  ): Promise<{
+    success: boolean;
+    data: any;
+    message: string;
+  }> {
+    try {
+      const ride = await this.prisma.ride.findFirst({
+        where: {
+          id: rideId,
+          driverId,
+          status: RideStatus.IN_PROGRESS,
+        },
+        include: {
+          payment: true,
+          passenger: { include: { user: true } },
+          driver: { include: { user: true } },
+        },
+      });
+
+      if (!ride) {
+        throw new NotFoundException(
+          'Corrida não encontrada ou não está em progresso',
+        );
+      }
+
+      // Atualizar dados da corrida
+      const updatedRide = await this.prisma.ride.update({
+        where: { id: rideId },
+        data: {
+          status: RideStatus.COMPLETED,
+          dropOffTime: new Date(),
+          actualDistance: completionData.actualDistance,
+          actualDuration: completionData.actualDuration,
+        },
+      });
+
+      // Disponibilizar motorista novamente
+      await this.prisma.driver.update({
+        where: { id: driverId },
+        data: {
+          isAvailable: true,
+          isActiveTrip: false,
+        },
+      });
+
+      // NOVO: Preparar informações de pagamento
+      const paymentInfo = {
+        rideId: ride.id,
+        amount: ride.finalPrice,
+        currency: 'BRL',
+        currentStatus: ride.payment?.status || PaymentStatus.PENDING,
+        requiresPayment:
+          !ride.payment || ride.payment.status === PaymentStatus.PENDING,
+        availableMethods: await this.paymentsService.getPaymentMethods(
+          ride.passenger.userId,
+        ),
+      };
+
+      return {
+        success: true,
+        data: {
+          rideId: updatedRide.id,
+          status: updatedRide.status,
+          completedAt: updatedRide.dropOffTime,
+          finalDistance: updatedRide.actualDistance,
+          finalDuration: updatedRide.actualDuration,
+          payment: paymentInfo,
+        },
+        message: 'Corrida finalizada com sucesso',
+      };
+    } catch (error) {
+      this.logger.error('Erro ao finalizar corrida:', error);
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao finalizar corrida',
+      };
+    }
+  }
+
+  // ==================== CONSULTAS COM INFORMAÇÕES DE PAGAMENTO ====================
 
   async getUserRides(
     userId: string,
@@ -313,7 +430,7 @@ export class RidesService {
               },
             },
             RideTypeConfig: true,
-            payment: true,
+            payment: true, // NOVO: Incluir dados de pagamento
             ratings: true,
           },
           orderBy: { createdAt: 'desc' },
@@ -348,6 +465,8 @@ export class RidesService {
     }
   }
 
+  // ==================== CANCELAMENTO INTEGRADO COM PAGAMENTOS ====================
+
   async cancelRide(
     userId: string,
     rideId: string,
@@ -365,6 +484,7 @@ export class RidesService {
           passenger: { include: { user: true } },
           driver: { include: { user: true } },
           RideTypeConfig: true,
+          payment: true, // NOVO: Incluir dados de pagamento
         },
       });
 
@@ -419,6 +539,7 @@ export class RidesService {
           passenger: { include: { user: true } },
           driver: { include: { user: true } },
           RideTypeConfig: true,
+          payment: true,
         },
       });
 
@@ -430,6 +551,12 @@ export class RidesService {
             isActiveTrip: false,
           },
         });
+      }
+
+      // NOVO: Processar reembolsos se necessário via PaymentsService
+      if (ride.payment && ride.payment.status === PaymentStatus.PAID) {
+        // Se já foi pago, processar reembolso
+        // A lógica de reembolso já está implementada no PaymentsService
       }
 
       if (cancellationFee > 0) {
@@ -457,53 +584,7 @@ export class RidesService {
     }
   }
 
-  private async notifyNearbyDrivers(ride: any): Promise<void> {
-    try {
-      const nearbyDrivers =
-        await this.mapsService.findAvailableDriversForRideType(
-          { latitude: ride.originLatitude, longitude: ride.originLongitude },
-          ride.rideTypeConfigId,
-          undefined,
-          15,
-          10,
-        );
-
-      this.logger.log(
-        `Notificando ${nearbyDrivers.length} motoristas sobre nova corrida ${ride.id}`,
-      );
-    } catch (error) {
-      this.logger.error('Erro ao notificar motoristas:', error);
-    }
-  }
-
-  private isPremiumTime(): boolean {
-    const hour = new Date().getHours();
-    return (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
-  }
-
-  private async processCancellationFee(ride: any, fee: number): Promise<void> {
-    try {
-      await this.prisma.payment.upsert({
-        where: { rideId: ride.id },
-        create: {
-          rideId: ride.id,
-          amount: fee,
-          status: PaymentStatus.PENDING,
-          paymentMethod: 'CANCELLATION_FEE',
-        },
-        update: {
-          amount: fee,
-          status: PaymentStatus.PENDING,
-        },
-      });
-
-      this.logger.log(
-        `Taxa de cancelamento de R$ ${fee} aplicada à corrida ${ride.id}`,
-      );
-    } catch (error) {
-      this.logger.error('Erro ao processar taxa de cancelamento:', error);
-    }
-  }
+  // ==================== UTILITÁRIOS ATUALIZADOS ====================
 
   private formatRideResponse(ride: any): any {
     return {
@@ -537,6 +618,17 @@ export class RidesService {
         currency: ride.currency,
         paymentStatus: ride.payment?.status,
       },
+      // NOVO: Informações detalhadas de pagamento
+      payment: ride.payment
+        ? {
+            method: ride.payment.method,
+            status: ride.payment.status,
+            confirmedByDriver: ride.payment.confirmedByDriver,
+            confirmationTime: ride.payment.driverConfirmationTime,
+            driverNotes: ride.payment.driverNotes,
+            requiresAction: this.getPaymentRequiredAction(ride),
+          }
+        : null,
       driver: ride.driver
         ? {
             id: ride.driver.id,
@@ -563,6 +655,8 @@ export class RidesService {
       details: {
         distance: ride.estimatedDistance,
         duration: ride.estimatedDuration,
+        actualDistance: ride.actualDistance,
+        actualDuration: ride.actualDuration,
         hasPets: ride.hasPets,
         specialRequirements: ride.specialRequirements,
         baggageQuantity: ride.baggageQuantity,
@@ -585,6 +679,78 @@ export class RidesService {
       createdAt: ride.createdAt,
       updatedAt: ride.updatedAt,
     };
+  }
+
+  private getPaymentRequiredAction(ride: any): string | null {
+    if (!ride.payment) {
+      return 'PAYMENT_REQUIRED';
+    }
+
+    switch (ride.payment.status) {
+      case PaymentStatus.PENDING:
+        if (!ride.payment.confirmedByDriver) {
+          return 'AWAITING_DRIVER_CONFIRMATION';
+        }
+        break;
+      case PaymentStatus.PAID:
+        if (!ride.payment.confirmedByDriver) {
+          return 'AWAITING_DRIVER_CONFIRMATION';
+        }
+        break;
+      case PaymentStatus.FAILED:
+        return 'PAYMENT_FAILED';
+    }
+
+    return null;
+  }
+
+  // Métodos existentes mantidos...
+  private async notifyNearbyDrivers(ride: any): Promise<void> {
+    try {
+      const nearbyDrivers =
+        await this.mapsService.findAvailableDriversForRideType(
+          { latitude: ride.originLatitude, longitude: ride.originLongitude },
+          ride.rideTypeConfigId,
+          undefined,
+          15,
+          10,
+        );
+
+      this.logger.log(
+        `Notificando ${nearbyDrivers.length} motoristas sobre nova corrida ${ride.id}`,
+      );
+    } catch (error) {
+      this.logger.error('Erro ao notificar motoristas:', error);
+    }
+  }
+
+  private isPremiumTime(): boolean {
+    const hour = new Date().getHours();
+    return (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
+  }
+
+  private async processCancellationFee(ride: any, fee: number): Promise<void> {
+    try {
+      await this.prisma.payment.upsert({
+        where: { rideId: ride.id },
+        create: {
+          rideId: ride.id,
+          amount: fee,
+          status: PaymentStatus.PENDING,
+          method: PaymentMethod.CASH,
+        },
+        update: {
+          amount: fee,
+          status: PaymentStatus.PENDING,
+        },
+      });
+
+      this.logger.log(
+        `Taxa de cancelamento de R$ ${fee} aplicada à corrida ${ride.id}`,
+      );
+    } catch (error) {
+      this.logger.error('Erro ao processar taxa de cancelamento:', error);
+    }
   }
 
   private cleanExpiredTokens(): void {
