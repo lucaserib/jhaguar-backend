@@ -2,3 +2,8 @@ export * from './add-wallet-balance.dto';
 export * from './process-ride-payment.dto';
 export * from './confirm-driver-payment.dto';
 export * from './wallet-response.dto';
+export * from './transfer-wallet-balance.dto';
+export * from './platform-fees-response.dto';
+export * from './transfer-response.dto';
+export * from './ride-payment-summary.dto';
+export * from './pending-fees.dto';
