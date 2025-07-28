@@ -28,22 +28,30 @@ export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
   private readonly stripe: Stripe | null = null;
   private readonly isSimulationMode: boolean;
+  private readonly isStripeEnabled: boolean;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
   ) {
     const stripeKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    this.isSimulationMode = !stripeKey || stripeKey.includes('test');
 
-    if (stripeKey) {
-      this.stripe = new Stripe(stripeKey, {
+    this.isStripeEnabled = Boolean(
+      stripeKey &&
+        stripeKey.length > 10 &&
+        !stripeKey.includes('your_key_here') &&
+        !stripeKey.includes('placeholder'),
+    );
+    this.isSimulationMode = !this.isStripeEnabled;
+
+    if (this.isStripeEnabled) {
+      this.stripe = new Stripe(stripeKey!, {
         apiVersion: '2025-06-30.basil',
       });
     }
 
     this.logger.log(
-      `PaymentsService iniciado - Modo: ${this.isSimulationMode ? 'SIMULAÇÃO' : 'PRODUÇÃO'}`,
+      `PaymentsService iniciado - Modo: ${this.isStripeEnabled ? 'HABILITADO' : 'DESABILITADO'} | Simulação: ${this.isSimulationMode ? 'SIMULAÇÃO' : 'PRODUÇÃO'}`,
     );
   }
 
@@ -100,21 +108,13 @@ export class PaymentsService {
         );
       }
 
-      // Verificar se temos chave do Stripe configurada
-      const stripeKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-      const hasValidStripeKey =
-        stripeKey && !stripeKey.includes('your_key_here');
-
-      if (this.isSimulationMode || !hasValidStripeKey) {
-        // MODO SIMULAÇÃO - Processar imediatamente
+      if (this.isSimulationMode) {
         this.logger.log(
           `[SIMULAÇÃO] Adicionando R$ ${addBalanceDto.amount} à carteira do usuário ${userId}`,
         );
 
-        // Simular delay de processamento
         await this.delay(1500);
 
-        // Criar transação de simulação
         const transaction = await this.prisma.transaction.create({
           data: {
             userId,
