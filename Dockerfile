@@ -7,9 +7,6 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Instalar dependências e garantir que o Stripe esteja incluído
-RUN npm ci || npm install
-RUN npm install stripe @types/stripe --save
 
 # Copiar arquivos do projeto
 COPY . .

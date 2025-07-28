@@ -307,7 +307,8 @@ export class PaymentsService {
 
     switch (paymentMethod) {
       case PaymentMethod.WALLET_BALANCE:
-        return this.processWalletPayment(userId, ride, amount, notes);
+        // 🔥 MUDANÇA: Agora apenas reserva o saldo, não debita imediatamente
+        return this.reserveWalletPayment(userId, ride, amount, notes);
 
       case PaymentMethod.CASH:
       case PaymentMethod.PIX:
@@ -324,7 +325,8 @@ export class PaymentsService {
     }
   }
 
-  private async processWalletPayment(
+  // 🔥 NOVO MÉTODO: Apenas reserva o saldo, não debita
+  private async reserveWalletPayment(
     userId: string,
     ride: any,
     amount: number,
@@ -338,54 +340,54 @@ export class PaymentsService {
       );
     }
 
+    // Verificar se tem saldo suficiente para reservar
     if (wallet.balance < amount) {
       throw new BadRequestException(
         `Saldo insuficiente. Disponível: R$ ${wallet.balance.toFixed(2)}, Necessário: R$ ${amount.toFixed(2)}`,
       );
     }
 
-    // Debitar da carteira
-    const updatedWallet = await this.prisma.userWallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: wallet.balance - amount,
-      },
-    });
+    this.logger.log(
+      `💰 Reservando R$ ${amount} da carteira do usuário ${userId} para corrida ${ride.id}`,
+    );
 
-    // Criar transação
+    // 🔥 MUDANÇA: Criar transação como PENDENTE, será processada quando motorista confirmar
     const transaction = await this.prisma.transaction.create({
       data: {
         userId,
         walletId: wallet.id,
         rideId: ride.id,
         type: TransactionType.RIDE_PAYMENT,
-        status: TransactionStatus.COMPLETED,
-        amount: -amount, // Negativo porque é débito
-        description: `Pagamento da corrida #${ride.id.substring(0, 8)}`,
+        status: TransactionStatus.PENDING, // ✅ PENDENTE até confirmação do motorista
+        amount: -amount, // Negativo porque será um débito
+        description: `Pagamento reservado da corrida #${ride.id.substring(0, 8)}`,
         metadata: {
           paymentMethod: PaymentMethod.WALLET_BALANCE,
           driverNotes: notes,
+          isReserved: true, // Flag para indicar que é uma reserva
+          originalBalance: wallet.balance,
         },
-        processedAt: new Date(),
       },
     });
 
-    // Atualizar ou criar registro de pagamento
+    // Atualizar ou criar registro de pagamento como PENDENTE
     await this.prisma.payment.upsert({
       where: { rideId: ride.id },
       create: {
         rideId: ride.id,
         amount,
         method: PaymentMethod.WALLET_BALANCE,
-        status: PaymentStatus.PAID,
+        status: PaymentStatus.PENDING, // ✅ PENDENTE até confirmação
         transactionId: transaction.id,
-        confirmedByDriver: false, // Ainda precisa da confirmação do motorista
+        confirmedByDriver: false,
+        driverNotes: notes,
       },
       update: {
         method: PaymentMethod.WALLET_BALANCE,
-        status: PaymentStatus.PAID,
+        status: PaymentStatus.PENDING,
         transactionId: transaction.id,
         confirmedByDriver: false,
+        driverNotes: notes,
       },
     });
 
@@ -393,7 +395,7 @@ export class PaymentsService {
     await this.prisma.ride.update({
       where: { id: ride.id },
       data: {
-        paymentStatus: PaymentStatus.PAID,
+        paymentStatus: PaymentStatus.PENDING, // ✅ PENDENTE
         finalPrice: amount,
       },
     });
@@ -404,11 +406,12 @@ export class PaymentsService {
         rideId: ride.id,
         paymentMethod: PaymentMethod.WALLET_BALANCE,
         amount,
-        newBalance: updatedWallet.balance,
+        currentBalance: wallet.balance, // ✅ Saldo não foi alterado ainda
         transactionId: transaction.id,
+        status: 'RESERVED', // Novo status para indicar reserva
         requiresDriverConfirmation: true,
       },
-      message: 'Pagamento realizado via saldo da conta',
+      message: 'Saldo reservado - aguardando confirmação do motorista',
     };
   }
 
@@ -477,7 +480,7 @@ export class PaymentsService {
         },
         include: {
           payment: true,
-          passenger: { include: { user: true } },
+          passenger: { include: { user: { include: { wallet: true } } } },
           driver: { include: { user: true } },
         },
       });
@@ -496,53 +499,21 @@ export class PaymentsService {
 
       const { paymentReceived, driverNotes } = confirmPaymentDto;
 
-      // Atualizar o pagamento
-      const updatedPayment = await this.prisma.payment.update({
-        where: { rideId: ride.id },
-        data: {
-          confirmedByDriver: true,
-          driverConfirmationTime: new Date(),
-          driverNotes: driverNotes || ride.payment.driverNotes,
-          status: paymentReceived ? PaymentStatus.PAID : PaymentStatus.FAILED,
-        },
-      });
-
-      // Atualizar a corrida
-      await this.prisma.ride.update({
-        where: { id: ride.id },
-        data: {
-          paymentStatus: paymentReceived
-            ? PaymentStatus.PAID
-            : PaymentStatus.FAILED,
-          status: paymentReceived ? 'COMPLETED' : 'COMPLETED', // Corrida finaliza independente do pagamento
-        },
-      });
-
-      // Se o pagamento falhou e foi via carteira, estornar o valor
-      if (
-        !paymentReceived &&
-        ride.payment.method === PaymentMethod.WALLET_BALANCE
-      ) {
-        await this.processRefund(
-          ride.id,
-          'Pagamento não confirmado pelo motorista',
+      // 🔥 PRINCIPAL MUDANÇA: Processar débito da carteira APENAS se confirmado
+      if (ride.payment.method === PaymentMethod.WALLET_BALANCE) {
+        return this.processWalletConfirmation(
+          ride,
+          paymentReceived,
+          driverNotes,
+        );
+      } else {
+        // Para outros métodos de pagamento, apenas atualizar confirmação
+        return this.processPresentialConfirmation(
+          ride,
+          paymentReceived,
+          driverNotes,
         );
       }
-
-      return {
-        success: true,
-        data: {
-          rideId: ride.id,
-          paymentStatus: updatedPayment.status,
-          paymentReceived,
-          confirmedAt: updatedPayment.driverConfirmationTime,
-          method: updatedPayment.method,
-          amount: updatedPayment.amount,
-        },
-        message: paymentReceived
-          ? 'Pagamento confirmado com sucesso'
-          : 'Pagamento marcado como não recebido',
-      };
     } catch (error) {
       this.logger.error('Erro ao confirmar pagamento:', error);
 
@@ -557,56 +528,262 @@ export class PaymentsService {
     }
   }
 
-  // ==================== REEMBOLSOS ====================
+  // 🔥 NOVO MÉTODO: Processa confirmação para pagamento via carteira
+  private async processWalletConfirmation(
+    ride: any,
+    paymentReceived: boolean,
+    driverNotes?: string,
+  ): Promise<any> {
+    const wallet = ride.passenger.user.wallet;
 
-  private async processRefund(rideId: string, reason: string): Promise<void> {
-    const ride = await this.prisma.ride.findUnique({
-      where: { id: rideId },
-      include: {
-        payment: true,
-        passenger: { include: { user: { include: { wallet: true } } } },
+    if (!wallet) {
+      throw new BadRequestException('Carteira do passageiro não encontrada');
+    }
+
+    // Buscar a transação pendente
+    const pendingTransaction = await this.prisma.transaction.findFirst({
+      where: {
+        rideId: ride.id,
+        type: TransactionType.RIDE_PAYMENT,
+        status: TransactionStatus.PENDING,
       },
     });
 
-    if (!ride || !ride.payment) {
-      return;
+    if (!pendingTransaction) {
+      throw new BadRequestException(
+        'Transação pendente não encontrada para esta corrida',
+      );
     }
 
-    // Apenas estornar se foi pago via carteira
-    if (ride.payment.method === PaymentMethod.WALLET_BALANCE) {
-      const wallet = ride.passenger.user.wallet;
-      if (wallet) {
-        // Devolver valor à carteira
-        await this.prisma.userWallet.update({
-          where: { id: wallet.id },
-          data: {
-            balance: wallet.balance + ride.payment.amount,
-          },
-        });
+    if (paymentReceived) {
+      // ✅ MOTORISTA CONFIRMOU: Efetivar o débito
+      this.logger.log(
+        `✅ Confirmação recebida - debitando R$ ${ride.payment.amount} da carteira do usuário ${ride.passenger.userId}`,
+      );
 
-        // Criar transação de reembolso
-        await this.prisma.transaction.create({
-          data: {
-            userId: ride.passenger.userId,
-            walletId: wallet.id,
-            rideId: ride.id,
-            type: TransactionType.REFUND,
-            status: TransactionStatus.COMPLETED,
-            amount: ride.payment.amount, // Positivo porque é crédito
-            description: `Reembolso: ${reason}`,
-            metadata: {
-              originalPaymentMethod: ride.payment.method,
-              refundReason: reason,
-            },
-            processedAt: new Date(),
-          },
-        });
+      // Verificar se ainda tem saldo suficiente
+      const currentWallet = await this.prisma.userWallet.findUnique({
+        where: { id: wallet.id },
+      });
 
-        this.logger.log(
-          `Reembolso processado: R$ ${ride.payment.amount} para usuário ${ride.passenger.userId}`,
+      if (!currentWallet || currentWallet.balance < ride.payment.amount) {
+        // Se não tem mais saldo, marcar como falha
+        await this.handleInsufficientFundsOnConfirmation(
+          ride,
+          pendingTransaction,
+          currentWallet?.balance || 0,
         );
+
+        return {
+          success: false,
+          data: null,
+          message: 'Saldo insuficiente no momento da confirmação',
+        };
       }
+
+      // 🔥 EFETUAR O DÉBITO REAL
+      const updatedWallet = await this.prisma.userWallet.update({
+        where: { id: wallet.id },
+        data: {
+          balance: currentWallet.balance - ride.payment.amount,
+        },
+      });
+
+      // Atualizar transação para COMPLETED
+      await this.prisma.transaction.update({
+        where: { id: pendingTransaction.id },
+        data: {
+          status: TransactionStatus.COMPLETED,
+          processedAt: new Date(),
+          metadata: {
+            ...((pendingTransaction.metadata as Record<string, any>) || {}),
+            confirmedByDriver: true,
+            driverConfirmationTime: new Date(),
+            newBalance: updatedWallet.balance,
+          },
+        },
+      });
+
+      // Atualizar pagamento
+      const updatedPayment = await this.prisma.payment.update({
+        where: { rideId: ride.id },
+        data: {
+          status: PaymentStatus.PAID,
+          confirmedByDriver: true,
+          driverConfirmationTime: new Date(),
+          driverNotes: driverNotes || ride.payment.driverNotes,
+        },
+      });
+
+      // Atualizar corrida
+      await this.prisma.ride.update({
+        where: { id: ride.id },
+        data: {
+          paymentStatus: PaymentStatus.PAID,
+          status: 'COMPLETED',
+        },
+      });
+
+      this.logger.log(
+        `💰 Débito efetuado com sucesso: R$ ${ride.payment.amount}. Novo saldo: R$ ${updatedWallet.balance}`,
+      );
+
+      return {
+        success: true,
+        data: {
+          rideId: ride.id,
+          paymentStatus: updatedPayment.status,
+          paymentReceived: true,
+          confirmedAt: updatedPayment.driverConfirmationTime,
+          method: updatedPayment.method,
+          amount: updatedPayment.amount,
+          newBalance: updatedWallet.balance,
+          transactionId: pendingTransaction.id,
+        },
+        message: 'Pagamento confirmado e saldo debitado com sucesso',
+      };
+    } else {
+      // ❌ MOTORISTA NÃO CONFIRMOU: Cancelar a transação (sem débito)
+      this.logger.log(
+        `❌ Pagamento não confirmado pelo motorista - cancelando reserva da corrida ${ride.id}`,
+      );
+
+      // Cancelar transação pendente
+      await this.prisma.transaction.update({
+        where: { id: pendingTransaction.id },
+        data: {
+          status: TransactionStatus.CANCELLLED,
+          failureReason: 'Pagamento não confirmado pelo motorista',
+          processedAt: new Date(),
+          metadata: {
+            ...((pendingTransaction.metadata as Record<string, any>) || {}),
+            confirmedByDriver: false,
+            driverConfirmationTime: new Date(),
+            driverNotes,
+          },
+        },
+      });
+
+      // Atualizar pagamento
+      const updatedPayment = await this.prisma.payment.update({
+        where: { rideId: ride.id },
+        data: {
+          status: PaymentStatus.FAILED,
+          confirmedByDriver: true, // Confirmou que NÃO recebeu
+          driverConfirmationTime: new Date(),
+          driverNotes: driverNotes || ride.payment.driverNotes,
+        },
+      });
+
+      // Atualizar corrida
+      await this.prisma.ride.update({
+        where: { id: ride.id },
+        data: {
+          paymentStatus: PaymentStatus.FAILED,
+          status: 'COMPLETED', // Corrida finaliza mesmo sem pagamento
+        },
+      });
+
+      return {
+        success: true,
+        data: {
+          rideId: ride.id,
+          paymentStatus: updatedPayment.status,
+          paymentReceived: false,
+          confirmedAt: updatedPayment.driverConfirmationTime,
+          method: updatedPayment.method,
+          amount: updatedPayment.amount,
+          currentBalance: wallet.balance, // Saldo não foi alterado
+          transactionId: pendingTransaction.id,
+        },
+        message: 'Pagamento marcado como não recebido - saldo não foi debitado',
+      };
     }
+  }
+
+  // 🔥 NOVO MÉTODO: Lidar com saldo insuficiente na confirmação
+  private async handleInsufficientFundsOnConfirmation(
+    ride: any,
+    pendingTransaction: any,
+    currentBalance: number,
+  ): Promise<void> {
+    // Marcar transação como falha
+    await this.prisma.transaction.update({
+      where: { id: pendingTransaction.id },
+      data: {
+        status: TransactionStatus.FAILED,
+        failureReason: `Saldo insuficiente na confirmação. Disponível: R$ ${currentBalance.toFixed(2)}, Necessário: R$ ${ride.payment.amount.toFixed(2)}`,
+        processedAt: new Date(),
+      },
+    });
+
+    // Marcar pagamento como falha
+    await this.prisma.payment.update({
+      where: { rideId: ride.id },
+      data: {
+        status: PaymentStatus.FAILED,
+        confirmedByDriver: true,
+        driverConfirmationTime: new Date(),
+        driverNotes: 'Saldo insuficiente no momento da confirmação',
+      },
+    });
+
+    // Atualizar corrida
+    await this.prisma.ride.update({
+      where: { id: ride.id },
+      data: {
+        paymentStatus: PaymentStatus.FAILED,
+        status: 'COMPLETED',
+      },
+    });
+
+    this.logger.warn(
+      `⚠️ Saldo insuficiente na confirmação da corrida ${ride.id}. Saldo: R$ ${currentBalance}, Necessário: R$ ${ride.payment.amount}`,
+    );
+  }
+
+  // Método para outros tipos de pagamento (sem alteração)
+  private async processPresentialConfirmation(
+    ride: any,
+    paymentReceived: boolean,
+    driverNotes?: string,
+  ): Promise<any> {
+    // Atualizar o pagamento
+    const updatedPayment = await this.prisma.payment.update({
+      where: { rideId: ride.id },
+      data: {
+        confirmedByDriver: true,
+        driverConfirmationTime: new Date(),
+        driverNotes: driverNotes || ride.payment.driverNotes,
+        status: paymentReceived ? PaymentStatus.PAID : PaymentStatus.FAILED,
+      },
+    });
+
+    // Atualizar a corrida
+    await this.prisma.ride.update({
+      where: { id: ride.id },
+      data: {
+        paymentStatus: paymentReceived
+          ? PaymentStatus.PAID
+          : PaymentStatus.FAILED,
+        status: 'COMPLETED',
+      },
+    });
+
+    return {
+      success: true,
+      data: {
+        rideId: ride.id,
+        paymentStatus: updatedPayment.status,
+        paymentReceived,
+        confirmedAt: updatedPayment.driverConfirmationTime,
+        method: updatedPayment.method,
+        amount: updatedPayment.amount,
+      },
+      message: paymentReceived
+        ? 'Pagamento confirmado com sucesso'
+        : 'Pagamento marcado como não recebido',
+    };
   }
 
   // ==================== HISTÓRICO E CONSULTAS ====================
