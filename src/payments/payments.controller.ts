@@ -245,11 +245,11 @@ export class PaymentsController {
     @Body() body: { paymentReceived: boolean; driverNotes?: string },
     @User() user: any,
   ) {
-    if (!user.isDriver || !user.driverId) {
-      throw new BadRequestException(
-        'Apenas motoristas podem confirmar pagamentos',
-      );
-    }
+    // if (!user.isDriver || !user.driverId) {
+    //   throw new BadRequestException(
+    //     'Apenas motoristas podem confirmar pagamentos',
+    //   );
+    // }
 
     const confirmPaymentDto: ConfirmDriverPaymentDto = {
       rideId,
@@ -264,7 +264,6 @@ export class PaymentsController {
   }
 
   // ==================== CONSULTAS ESPECÍFICAS ====================
-
   @Get('ride/:rideId/status')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

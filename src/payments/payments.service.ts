@@ -507,7 +507,6 @@ export class PaymentsService {
           driverNotes,
         );
       } else {
-        // Para outros métodos de pagamento, apenas atualizar confirmação
         return this.processPresentialConfirmation(
           ride,
           paymentReceived,
