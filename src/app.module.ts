@@ -15,6 +15,7 @@ import { AuthModule } from './auth/auth.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MapsModule } from './maps/maps.module';
 import { RideTypesModule } from './ride-types/ride-types.module';
+import { StripeModule } from './stripe/stripe.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { RideTypesModule } from './ride-types/ride-types.module';
     RatingsModule,
     DocumentsModule,
     NotificationsModule,
+    StripeModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -94,18 +94,19 @@ export class PaymentsService {
   }> {
     try {
       const wallet = await this.getOrCreateWallet(userId);
-
       if (wallet.isBlocked) {
         throw new BadRequestException(
           `Carteira bloqueada: ${wallet.blockReason}`,
         );
       }
 
-      let stripePaymentIntent: string | null = null;
-      let stripeCustomerId: string | null = null;
+      // Verificar se temos chave do Stripe configurada
+      const stripeKey = this.configService.get<string>('STRIPE_SECRET_KEY');
+      const hasValidStripeKey =
+        stripeKey && !stripeKey.includes('your_key_here');
 
-      if (this.isSimulationMode) {
-        // MODO SIMULAÇÃO - Simular sucesso do Stripe
+      if (this.isSimulationMode || !hasValidStripeKey) {
+        // MODO SIMULAÇÃO - Processar imediatamente
         this.logger.log(
           `[SIMULAÇÃO] Adicionando R$ ${addBalanceDto.amount} à carteira do usuário ${userId}`,
         );
@@ -113,93 +114,80 @@ export class PaymentsService {
         // Simular delay de processamento
         await this.delay(1500);
 
-        stripePaymentIntent = `pi_sim_${Date.now()}`;
-        stripeCustomerId = `cus_sim_${userId.substring(0, 8)}`;
-      } else {
-        // MODO PRODUÇÃO - Integração real com Stripe
-        if (!this.stripe) {
-          throw new BadRequestException('Sistema de pagamento não configurado');
-        }
-
-        const user = await this.prisma.user.findUnique({
-          where: { id: userId },
-        });
-
-        if (!user) {
-          throw new NotFoundException('Usuário não encontrado');
-        }
-
-        const customer = await this.getOrCreateStripeCustomer(user);
-        stripeCustomerId = customer.id;
-
-        const paymentIntent = await this.stripe.paymentIntents.create({
-          amount: Math.round(addBalanceDto.amount * 100), // Stripe usa centavos
-          currency: 'brl',
-          customer: customer.id,
-          description: `Adição de saldo - ${user.firstName} ${user.lastName}`,
-          automatic_payment_methods: {
-            enabled: true,
-          },
-          metadata: {
+        // Criar transação de simulação
+        const transaction = await this.prisma.transaction.create({
+          data: {
             userId,
-            type: 'wallet_topup',
-            originalAmount: addBalanceDto.amount.toString(),
+            walletId: wallet.id,
+            type: TransactionType.WALLET_TOPUP,
+            status: TransactionStatus.COMPLETED,
+            amount: addBalanceDto.amount,
+            description: `Adição de saldo via ${addBalanceDto.paymentMethod || 'cartão'} (simulação)`,
+            stripePaymentIntentId: `pi_sim_${Date.now()}`,
+            metadata: {
+              paymentMethod: addBalanceDto.paymentMethod || 'CREDIT_CARD',
+              isSimulation: true,
+            },
+            processedAt: new Date(),
           },
         });
 
-        stripePaymentIntent = paymentIntent.id;
-      }
-
-      // Criar transação pendente
-      const transaction = await this.prisma.transaction.create({
-        data: {
-          userId,
-          walletId: wallet.id,
-          type: TransactionType.WALLET_TOPUP,
-          status: this.isSimulationMode
-            ? TransactionStatus.COMPLETED
-            : TransactionStatus.PENDING,
-          amount: addBalanceDto.amount,
-          description: `Adição de saldo via ${addBalanceDto.paymentMethod || 'cartão'}`,
-          stripePaymentIntentId: stripePaymentIntent,
-          stripeCustomerId: stripeCustomerId,
-          metadata: {
-            paymentMethod: addBalanceDto.paymentMethod || 'CREDIT_CARD',
-            isSimulation: this.isSimulationMode,
-          },
-          processedAt: this.isSimulationMode ? new Date() : null,
-        },
-      });
-
-      // Se é simulação, atualizar saldo imediatamente
-      if (this.isSimulationMode) {
-        await this.prisma.userWallet.update({
+        // Atualizar saldo imediatamente
+        const updatedWallet = await this.prisma.userWallet.update({
           where: { id: wallet.id },
           data: {
             balance: wallet.balance + addBalanceDto.amount,
           },
         });
+
+        return {
+          success: true,
+          data: {
+            transactionId: transaction.id,
+            amount: addBalanceDto.amount,
+            newBalance: updatedWallet.balance,
+            status: 'COMPLETED',
+            paymentIntentId: transaction.stripePaymentIntentId,
+            isSimulation: true,
+          },
+          message: 'Saldo adicionado com sucesso (simulação)',
+        };
       }
+
+      // MODO PRODUÇÃO - Criar transação pendente que será processada via Stripe
+      this.logger.log(
+        `[PRODUÇÃO] Criando transação pendente para usuário ${userId} - R$ ${addBalanceDto.amount}`,
+      );
+
+      const transaction = await this.prisma.transaction.create({
+        data: {
+          userId,
+          walletId: wallet.id,
+          type: TransactionType.WALLET_TOPUP,
+          status: TransactionStatus.PENDING,
+          amount: addBalanceDto.amount,
+          description: `Adição de saldo via ${addBalanceDto.paymentMethod || 'cartão'}`,
+          metadata: {
+            paymentMethod: addBalanceDto.paymentMethod || 'CREDIT_CARD',
+            isSimulation: false,
+          },
+        },
+      });
 
       return {
         success: true,
         data: {
           transactionId: transaction.id,
           amount: addBalanceDto.amount,
-          newBalance: this.isSimulationMode
-            ? wallet.balance + addBalanceDto.amount
-            : wallet.balance,
-          status: transaction.status,
-          paymentIntentId: stripePaymentIntent,
-          isSimulation: this.isSimulationMode,
+          newBalance: wallet.balance, // Saldo ainda não foi atualizado
+          status: 'PENDING',
+          requiresStripePayment: true,
+          isSimulation: false,
         },
-        message: this.isSimulationMode
-          ? 'Saldo adicionado com sucesso (simulação)'
-          : 'Processando adição de saldo - aguarde confirmação',
+        message: 'Transação criada - proceda com o pagamento via Stripe',
       };
     } catch (error) {
       this.logger.error('Erro ao adicionar saldo:', error);
-
       return {
         success: false,
         data: null,

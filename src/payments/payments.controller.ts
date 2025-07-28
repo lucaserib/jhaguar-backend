@@ -12,6 +12,7 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -37,6 +38,7 @@ import {
 @ApiTags('Pagamentos')
 @Controller('payments')
 export class PaymentsController {
+  private readonly logger = new Logger(PaymentsController.name);
   constructor(private readonly paymentsService: PaymentsService) {}
 
   // ==================== CARTEIRA ====================
@@ -384,6 +386,9 @@ export class PaymentsController {
     status: 400,
     description: 'Assinatura inválida ou erro no processamento',
   })
+  // Localize este método no seu payments.controller.ts e substitua:
+  @Post('webhook/stripe')
+  @HttpCode(HttpStatus.OK)
   async handleStripeWebhook(
     @Headers('stripe-signature') signature: string,
     @RawBody() payload: Buffer,
@@ -392,11 +397,14 @@ export class PaymentsController {
       if (!signature) {
         throw new BadRequestException('Assinatura do Stripe não encontrada');
       }
-
+      this.logger.log('Webhook Stripe recebido');
       await this.paymentsService.handleStripeWebhook(signature, payload);
-
-      return { received: true };
+      return {
+        received: true,
+        timestamp: new Date().toISOString(),
+      };
     } catch (error) {
+      this.logger.error('Erro ao processar webhook Stripe:', error);
       throw new BadRequestException(
         error instanceof Error ? error.message : 'Erro ao processar webhook',
       );
