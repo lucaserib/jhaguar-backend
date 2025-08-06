@@ -1,4 +1,3 @@
-// src/passengers/passengers.controller.ts
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
