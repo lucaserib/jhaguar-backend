@@ -62,6 +62,8 @@ model Driver {
   rides                 Ride[]
   documents             DriverDocument[]
   driverRideTypes       DriverRideType[]
+  locations             DriverLocation[]
+  rideStatusHistory     RideStatusHistory[]
 
   @@index([currentLatitude, currentLongitude])
   @@index([isOnline, isAvailable])
@@ -91,6 +93,7 @@ model Passenger {
   workLongitude       Float?
   user                User    @relation(fields: [userId], references: [id])
   rides               Ride[]
+  rideRequests        RideRequest[]
 }
 
 model Vehicle {
@@ -163,6 +166,7 @@ model RideTypeConfig {
   updatedAt           DateTime         @updatedAt
   rides               Ride[]
   driverSupport       DriverRideType[]
+  rideRequests        RideRequest[]
 
   @@index([type])
   @@index([isActive])
@@ -226,6 +230,7 @@ model Ride {
   ratings              Rating[]
   payment              Payment?
   locations            RideLocation[]
+  statusHistory        RideStatusHistory[]
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
   RideTypeConfig       RideTypeConfig? @relation(fields: [rideTypeConfigId], references: [id])
@@ -426,4 +431,79 @@ enum DocumentType {
   MOTORCYCLE_LICENSE
   PET_TRANSPORT_CERTIFICATE
   OTHER
+}
+
+model DriverLocation {
+  id           String   @id @default(uuid())
+  driverId     String
+  latitude     Decimal  @db.Decimal(10, 8)
+  longitude    Decimal  @db.Decimal(11, 8)
+  heading      Decimal? @db.Decimal(5, 2)
+  speed        Decimal? @db.Decimal(5, 2)
+  accuracy     Decimal? @db.Decimal(5, 2)
+  isOnline     Boolean  @default(false)
+  isAvailable  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([driverId])
+  @@index([latitude, longitude])
+  @@index([isOnline, isAvailable])
+  @@index([createdAt])
+}
+
+model RideRequest {
+  id                   String            @id @default(uuid())
+  passengerId          String
+  rideTypeId           String
+  pickupAddress        String
+  pickupLatitude       Decimal           @db.Decimal(10, 8)
+  pickupLongitude      Decimal           @db.Decimal(11, 8)
+  destinationAddress   String
+  destinationLatitude  Decimal           @db.Decimal(10, 8)
+  destinationLongitude Decimal           @db.Decimal(11, 8)
+  estimatedPrice       Decimal?          @db.Decimal(10, 2)
+  estimatedDistance    Int?
+  estimatedDuration    Int?
+  status               RideRequestStatus @default(PENDING)
+  requestedAt          DateTime          @default(now())
+  expiresAt            DateTime
+  updatedAt            DateTime          @updatedAt
+
+  passenger   Passenger       @relation(fields: [passengerId], references: [id])
+  rideType    RideTypeConfig  @relation(fields: [rideTypeId], references: [id])
+
+  @@index([status])
+  @@index([passengerId])
+  @@index([rideTypeId])
+  @@index([expiresAt])
+  @@index([pickupLatitude, pickupLongitude])
+}
+
+enum RideRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model RideStatusHistory {
+  id                String   @id @default(uuid())
+  rideId            String
+  driverId          String
+  previousStatus    String?
+  newStatus         String
+  locationLatitude  Decimal? @db.Decimal(10, 8)
+  locationLongitude Decimal? @db.Decimal(11, 8)
+  notes             String?
+  changedAt         DateTime @default(now())
+
+  ride   Ride   @relation(fields: [rideId], references: [id])
+  driver Driver @relation(fields: [driverId], references: [id])
+
+  @@index([rideId])
+  @@index([driverId])
+  @@index([changedAt])
 }

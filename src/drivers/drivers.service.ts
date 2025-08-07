@@ -1,15 +1,22 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDriverDto } from './dto/create-driver.dto';
 import { Status } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
+import { LocationUpdateDto } from './dto/location-update.dto';
+import { UpdateAvailabilityDto } from './dto/update-availability.dto';
+import { DriverStatsResponseDto, StatsPeriod } from './dto/driver-stats.dto';
+import { RedisService } from './redis.service';
 
 @Injectable()
 export class DriversService {
+  private readonly logger = new Logger(DriversService.name);
+
   constructor(
     private prisma: PrismaService,
     private notificationsService: NotificationsService,
+    private redisService: RedisService,
   ) {}
 
   async create(createDriverDto: CreateDriverDto) {
@@ -305,5 +312,294 @@ export class DriversService {
       isAvailable: updatedDriver.isAvailable,
       message: `Motorista ${updatedDriver.isAvailable ? 'disponível' : 'indisponível'} para corridas`,
     };
+  }
+
+  // Novas funcionalidades obrigatórias
+
+  async updateDriverStatus(driverId: string, status: Status) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: { user: true },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+    }
+
+    const updatedDriver = await this.prisma.driver.update({
+      where: { id: driverId },
+      data: { 
+        accountStatus: status,
+      },
+      include: { user: true },
+    });
+
+    // Log de auditoria
+    this.logger.log(`Driver status updated: ${driverId} from ${driver.accountStatus} to ${status}`);
+
+    return {
+      success: true,
+      data: {
+        id: updatedDriver.id,
+        status: updatedDriver.accountStatus,
+        updatedAt: new Date(),
+      },
+    };
+  }
+
+  async updateAvailability(driverId: string, updateData: UpdateAvailabilityDto) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+    }
+
+    const updateFields: any = {
+      isOnline: updateData.isOnline,
+      isAvailable: updateData.isAvailable,
+    };
+
+    // Atualizar localização se fornecida
+    if (updateData.currentLocation) {
+      updateFields.currentLatitude = updateData.currentLocation.lat;
+      updateFields.currentLongitude = updateData.currentLocation.lng;
+      updateFields.lastLocationUpdate = new Date();
+    }
+
+    // Definir timestamps de online/offline
+    if (updateData.isOnline && !driver.isOnline) {
+      // Motorista ficou online
+      this.logger.log(`Driver ${driverId} went online`);
+    } else if (!updateData.isOnline && driver.isOnline) {
+      // Motorista ficou offline
+      this.logger.log(`Driver ${driverId} went offline`);
+    }
+
+    const updatedDriver = await this.prisma.driver.update({
+      where: { id: driverId },
+      data: updateFields,
+    });
+
+    // Atualizar cache do Redis se localização foi fornecida
+    if (updateData.currentLocation) {
+      await this.updateLocationCache(driverId, {
+        latitude: updateData.currentLocation.lat,
+        longitude: updateData.currentLocation.lng,
+        isOnline: updateData.isOnline,
+        isAvailable: updateData.isAvailable,
+        updatedAt: new Date(),
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        isOnline: updatedDriver.isOnline,
+        isAvailable: updatedDriver.isAvailable,
+        onlineAt: updateData.isOnline ? new Date() : null,
+        offlineAt: !updateData.isOnline ? new Date() : null,
+      },
+    };
+  }
+
+  async updateLocationWithCache(driverId: string, locationData: LocationUpdateDto) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+    }
+
+    // Rate limiting check via Redis
+    const updateCount = await this.redisService.incrementDriverLocationUpdates(driverId);
+    if (updateCount > 1) {
+      throw new BadRequestException('Rate limit exceeded: maximum 1 location update per second');
+    }
+
+    // Atualizar no banco de dados
+    await this.prisma.driver.update({
+      where: { id: driverId },
+      data: {
+        currentLatitude: locationData.latitude,
+        currentLongitude: locationData.longitude,
+        isOnline: locationData.isOnline,
+        isAvailable: locationData.isAvailable,
+        lastLocationUpdate: new Date(),
+      },
+    });
+
+    // Salvar na tabela DriverLocation
+    await this.prisma.driverLocation.create({
+      data: {
+        driverId,
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        heading: locationData.heading,
+        speed: locationData.speed,
+        accuracy: locationData.accuracy,
+        isOnline: locationData.isOnline,
+        isAvailable: locationData.isAvailable,
+      },
+    });
+
+    // Atualizar cache do Redis
+    await this.updateLocationCache(driverId, {
+      latitude: locationData.latitude,
+      longitude: locationData.longitude,
+      isOnline: locationData.isOnline,
+      isAvailable: locationData.isAvailable,
+      heading: locationData.heading,
+      speed: locationData.speed,
+      accuracy: locationData.accuracy,
+      updatedAt: new Date(),
+    });
+
+    return {
+      success: true,
+      message: 'Localização atualizada com sucesso',
+    };
+  }
+
+  async getDriverStats(driverId: string, period?: StatsPeriod): Promise<DriverStatsResponseDto> {
+    const driver = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+    });
+
+    if (!driver) {
+      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+    }
+
+    const startDate = this.getStartDateForPeriod(period || StatsPeriod.TODAY);
+    const endDate = new Date();
+
+    // Buscar corridas do período
+    const rides = await this.prisma.ride.findMany({
+      where: {
+        driverId,
+        createdAt: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        ratings: true,
+        payment: true,
+      },
+    });
+
+    const completedRides = rides.filter(ride => ride.status === 'COMPLETED');
+    const cancelledRides = rides.filter(ride => ride.status === 'CANCELLED');
+
+    // Calcular estatísticas
+    const totalEarnings = completedRides.reduce((sum, ride) => sum + (ride.finalPrice || 0), 0);
+    const totalDistance = completedRides.reduce((sum, ride) => sum + (ride.actualDistance || 0), 0);
+    
+    const ratings = rides.flatMap(ride => ride.ratings);
+    const avgRating = ratings.length > 0 
+      ? ratings.reduce((sum, rating) => sum + rating.rating, 0) / ratings.length 
+      : 0;
+
+    // Calcular taxa de aceitação (seria necessário ter dados de solicitações rejeitadas)
+    const acceptanceRate = rides.length > 0 ? (completedRides.length / rides.length) * 100 : 0;
+
+    return {
+      earnings: {
+        total: totalEarnings,
+        count: completedRides.length,
+        average: completedRides.length > 0 ? totalEarnings / completedRides.length : 0,
+      },
+      rides: {
+        completed: completedRides.length,
+        cancelled: cancelledRides.length,
+        acceptance_rate: acceptanceRate,
+      },
+      ratings: {
+        average: avgRating,
+        count: ratings.length,
+      },
+      distance: {
+        total_km: totalDistance,
+        average_per_ride: completedRides.length > 0 ? totalDistance / completedRides.length : 0,
+      },
+      onlineTime: {
+        total_hours: 0, // Seria calculado com base em logs de online/offline
+        productive_hours: 0, // Tempo em corridas ativas
+      },
+    };
+  }
+
+  private async updateLocationCache(driverId: string, locationData: any) {
+    try {
+      await this.redisService.setDriverLocation(driverId, locationData);
+    } catch (error) {
+      this.logger.error(`Error updating location cache for driver ${driverId}: ${error.message}`);
+    }
+  }
+
+  private getStartDateForPeriod(period: StatsPeriod): Date {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    switch (period) {
+      case StatsPeriod.TODAY:
+        return startOfDay;
+      case StatsPeriod.WEEK:
+        const startOfWeek = new Date(startOfDay);
+        startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
+        return startOfWeek;
+      case StatsPeriod.MONTH:
+        return new Date(now.getFullYear(), now.getMonth(), 1);
+      default:
+        return startOfDay;
+    }
+  }
+
+  async getDriverLocationFromCache(driverId: string) {
+    try {
+      const cachedLocation = await this.redisService.getDriverLocation(driverId);
+      
+      if (cachedLocation) {
+        return cachedLocation;
+      }
+
+      // Fallback para banco de dados
+      const dbLocation = await this.prisma.driverLocation.findFirst({
+        where: { driverId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (dbLocation) {
+        // Atualizar cache imediatamente
+        await this.updateLocationCache(driverId, {
+          latitude: Number(dbLocation.latitude),
+          longitude: Number(dbLocation.longitude),
+          isOnline: dbLocation.isOnline,
+          isAvailable: dbLocation.isAvailable,
+          heading: Number(dbLocation.heading),
+          speed: Number(dbLocation.speed),
+          accuracy: Number(dbLocation.accuracy),
+          updatedAt: dbLocation.updatedAt,
+        });
+
+        return {
+          latitude: Number(dbLocation.latitude),
+          longitude: Number(dbLocation.longitude),
+          isOnline: dbLocation.isOnline,
+          isAvailable: dbLocation.isAvailable,
+          heading: Number(dbLocation.heading),
+          speed: Number(dbLocation.speed),
+          accuracy: Number(dbLocation.accuracy),
+          updatedAt: dbLocation.updatedAt,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error(`Error getting driver location: ${error.message}`);
+      return null;
+    }
   }
 }

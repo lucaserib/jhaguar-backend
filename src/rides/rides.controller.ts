@@ -22,6 +22,12 @@ import { RidesService } from './rides.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { User } from '../auth/decorator/user.decorator';
 import { CreateRideDto } from './dto/create-ride.dto';
+import { AcceptRideDto } from './dto/accept-ride.dto';
+import { RejectRideDto } from './dto/reject-ride.dto';
+import { ArrivedDto } from './dto/arrived.dto';
+import { StartRideDto } from './dto/start-ride.dto';
+import { CompleteRideDto } from './dto/complete-ride.dto';
+import { CancelRideDto } from './dto/cancel-ride.dto';
 import { RideStatus } from '@prisma/client';
 
 @ApiTags('Corridas')
@@ -179,9 +185,252 @@ export class RidesController {
         rideCreation: true,
         rideCancellation: true,
         rideHistory: true,
-        realTimeTracking: false, // TODO: Implementar
-        pushNotifications: false, // TODO: Implementar
+        realTimeTracking: true,
+        pushNotifications: true,
       },
     };
+  }
+
+  @Get('driver/pending')
+  @ApiOperation({ summary: 'Buscar corridas pendentes para motorista' })
+  @ApiQuery({ name: 'driverId', description: 'ID do motorista' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Limite de resultados',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de corridas pendentes retornada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'array', items: { type: 'object' } },
+      },
+    },
+  })
+  async getPendingRides(
+    @Query('driverId') driverId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const limitNum = limit ? parseInt(limit) : undefined;
+    return this.ridesService.getPendingRidesForDriver(driverId, limitNum);
+  }
+
+  @Put(':rideId/accept')
+  @ApiOperation({ summary: 'Aceitar uma corrida' })
+  @ApiParam({ name: 'rideId', description: 'ID da corrida' })
+  @ApiResponse({
+    status: 200,
+    description: 'Corrida aceita com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            rideId: { type: 'string' },
+            status: { type: 'string' },
+            acceptedAt: { type: 'string' },
+            estimatedPickupTime: { type: 'number' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Corrida não encontrada' })
+  @ApiResponse({
+    status: 400,
+    description: 'Corrida não disponível para aceitação',
+  })
+  async acceptRide(
+    @Param('rideId') rideId: string,
+    @Body() acceptRideDto: AcceptRideDto,
+    @User() user: any,
+  ) {
+    const driverId = user.driverId || user.id; // fallback
+    return this.ridesService.acceptRide(driverId, rideId, acceptRideDto);
+  }
+
+  @Put(':rideId/reject')
+  @ApiOperation({ summary: 'Rejeitar uma corrida' })
+  @ApiParam({ name: 'rideId', description: 'ID da corrida' })
+  @ApiResponse({
+    status: 200,
+    description: 'Corrida rejeitada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        message: { type: 'string' },
+      },
+    },
+  })
+  async rejectRide(
+    @Param('rideId') rideId: string,
+    @Body() rejectRideDto: RejectRideDto,
+    @User() user: any,
+  ) {
+    const driverId = user.driverId || user.id; // fallback
+    return this.ridesService.rejectRide(driverId, rideId, rejectRideDto);
+  }
+
+  @Put(':rideId/arrived')
+  @ApiOperation({ summary: 'Marcar chegada no local de embarque' })
+  @ApiParam({ name: 'rideId', description: 'ID da corrida' })
+  @ApiResponse({
+    status: 200,
+    description: 'Chegada marcada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            arrivedAt: { type: 'string' },
+            waitingStartedAt: { type: 'string' },
+          },
+        },
+      },
+    },
+  })
+  async markArrived(
+    @Param('rideId') rideId: string,
+    @Body() arrivedDto: ArrivedDto,
+    @User() user: any,
+  ) {
+    const driverId = user.driverId || user.id; // fallback
+    return this.ridesService.markDriverArrived(driverId, rideId, arrivedDto);
+  }
+
+  @Put(':rideId/start')
+  @ApiOperation({ summary: 'Iniciar a corrida' })
+  @ApiParam({ name: 'rideId', description: 'ID da corrida' })
+  @ApiResponse({
+    status: 200,
+    description: 'Corrida iniciada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            startedAt: { type: 'string' },
+            route: { type: 'object' },
+          },
+        },
+      },
+    },
+  })
+  async startRide(
+    @Param('rideId') rideId: string,
+    @Body() startRideDto: StartRideDto,
+    @User() user: any,
+  ) {
+    const driverId = user.driverId || user.id; // fallback
+    return this.ridesService.startRide(driverId, rideId, startRideDto);
+  }
+
+  @Put(':rideId/complete')
+  @ApiOperation({ summary: 'Finalizar a corrida' })
+  @ApiParam({ name: 'rideId', description: 'ID da corrida' })
+  @ApiResponse({
+    status: 200,
+    description: 'Corrida finalizada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            completedAt: { type: 'string' },
+            finalPrice: { type: 'number' },
+            earnings: { type: 'number' },
+            summary: { type: 'object' },
+          },
+        },
+      },
+    },
+  })
+  async completeRide(
+    @Param('rideId') rideId: string,
+    @Body() completeRideDto: CompleteRideDto,
+    @User() user: any,
+  ) {
+    const driverId = user.driverId || user.id;
+    return this.ridesService.completeRideNew(driverId, rideId, completeRideDto);
+  }
+
+  @Put(':rideId/cancel-new')
+  @ApiOperation({ summary: 'Cancelar corrida (nova versão)' })
+  @ApiParam({ name: 'rideId', description: 'ID da corrida' })
+  @ApiResponse({
+    status: 200,
+    description: 'Corrida cancelada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            status: { type: 'string' },
+            cancelledAt: { type: 'string' },
+            cancellationFee: { type: 'number' },
+            refundAmount: { type: 'number' },
+          },
+        },
+      },
+    },
+  })
+  async cancelRideNew(
+    @Param('rideId') rideId: string,
+    @Body() cancelRideDto: CancelRideDto,
+    @User() user: any,
+  ) {
+    const driverId = user.driverId || user.id;
+    return this.ridesService.cancelRideNew(driverId, rideId, cancelRideDto);
+  }
+
+  @Get('my/driver-new')
+  @ApiOperation({ summary: 'Buscar corridas do motorista (nova versão)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'offset', required: false, type: Number })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiResponse({
+    status: 200,
+    description: 'Corridas retornadas com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            rides: { type: 'array' },
+            summary: { type: 'object' },
+            pagination: { type: 'object' },
+          },
+        },
+      },
+    },
+  })
+  async getDriverRides(
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+    @Query('status') status?: string,
+    @User() user?: any,
+  ) {
+    const driverId = user.driverId || user.id;
+    const limitNum = limit ? parseInt(limit) : undefined;
+    const offsetNum = offset ? parseInt(offset) : undefined;
+
+    return this.ridesService.getDriverRides(
+      driverId,
+      limitNum,
+      offsetNum,
+      status,
+    );
   }
 }

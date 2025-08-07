@@ -28,6 +28,8 @@ import {
   PriceResponse,
   GeocodeResponse,
 } from './dto';
+import { NearbyDriversDto } from './dto/nearby-drivers.dto';
+import { CalculateRouteNewDto } from './dto/calculate-route-new.dto';
 import { Gender } from '@prisma/client';
 
 @ApiTags('Maps & Localização')
@@ -532,6 +534,96 @@ export class MapsController {
         surgeAreas: '/maps/zones/surge-areas',
       },
     };
+  }
+
+  // ==================== NOVAS ROTAS OBRIGATÓRIAS ====================
+
+  @Post('nearby-drivers-geospatial')
+  @ApiOperation({
+    summary: 'Buscar motoristas próximos com consulta geoespacial',
+    description:
+      'Busca otimizada de motoristas próximos usando índices geoespaciais',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de motoristas próximos retornada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'array', items: { type: 'object' } },
+      },
+    },
+  })
+  async findNearbyDriversGeospatial(
+    @Body() nearbyDriversDto: NearbyDriversDto,
+  ) {
+    try {
+      const drivers =
+        await this.mapsService.findNearbyDriversGeospatial(nearbyDriversDto);
+
+      return {
+        success: true,
+        data: drivers,
+        count: drivers.length,
+        message: `${drivers.length} motoristas encontrados`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: [],
+        count: 0,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Erro ao buscar motoristas próximos',
+      };
+    }
+  }
+
+  @Post('calculate-route-optimized')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Calcular rota otimizada entre pontos',
+    description: 'Calcula a melhor rota considerando tráfego e waypoints',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Rota calculada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            distance: { type: 'number' },
+            duration: { type: 'number' },
+            polyline: { type: 'string' },
+            steps: { type: 'array' },
+          },
+        },
+      },
+    },
+  })
+  async calculateRouteOptimized(
+    @Body() calculateRouteDto: CalculateRouteNewDto,
+  ) {
+    try {
+      const route = await this.mapsService.calculateRouteNew(calculateRouteDto);
+
+      return {
+        success: true,
+        data: route,
+        message: 'Rota calculada com sucesso',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao calcular rota',
+      };
+    }
   }
 
   private calculateCurrentSurge(lat: number, lng: number): number {

@@ -2,6 +2,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -16,6 +18,10 @@ async function bootstrap() {
     credentials: true,
     allowedHeaders: 'Content-Type,Authorization,Accept,Origin,X-Requested-With',
   });
+
+  // Interceptors e filters globais
+  app.useGlobalInterceptors(new LoggingInterceptor());
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   const config = new DocumentBuilder()
     .setTitle('Ride-Sharing API')
@@ -90,6 +96,13 @@ async function bootstrap() {
   logger.log(`🚀 Aplicação rodando em: http://localhost:${port}`);
   logger.log(`📚 Documentação da API: http://localhost:${port}/api-docs`);
   logger.log(`🎯 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+  logger.log(`🔌 WebSocket Gateways disponíveis:`);
+  logger.log(`   - /driver (Driver operations)`);
+  logger.log(`   - /ride (Ride status updates)`);
+  logger.log(`   - /notifications (Push notifications)`);
+  logger.log(`⚡ Rate limiting ativo`);
+  logger.log(`📊 Logs de auditoria ativados`);
+  logger.log(`💾 Redis cache configurado para localização de motoristas`);
 }
 
 bootstrap().catch((error) => {
