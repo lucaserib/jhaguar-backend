@@ -30,19 +30,39 @@ class LocationDto {
 }
 
 export class CreateRideDto {
+  @ApiProperty({ description: 'ID do passageiro', required: false })
+  @IsOptional()
+  @IsString()
+  passengerId?: string;
+
   @ApiProperty({ description: 'ID do tipo de corrida' })
   @IsString()
   rideTypeId: string;
 
-  @ApiProperty({ description: 'Localização de origem', type: LocationDto })
-  @ValidateNested()
-  @Type(() => LocationDto)
-  origin: LocationDto;
+  @ApiProperty({ description: 'Nome do tipo de corrida', required: false })
+  @IsOptional()
+  @IsString()
+  rideTypeName?: string;
 
-  @ApiProperty({ description: 'Localização de destino', type: LocationDto })
+  @ApiProperty({
+    description: 'Localização de origem',
+    type: LocationDto,
+    required: false,
+  })
+  @IsOptional()
   @ValidateNested()
   @Type(() => LocationDto)
-  destination: LocationDto;
+  origin?: LocationDto;
+
+  @ApiProperty({
+    description: 'Localização de destino',
+    type: LocationDto,
+    required: false,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => LocationDto)
+  destination?: LocationDto;
 
   @ApiProperty({ description: 'Distância estimada em metros' })
   @IsNumber()
@@ -91,7 +111,85 @@ export class CreateRideDto {
   @Min(0)
   baggageQuantity?: number;
 
-  @ApiProperty({ description: 'Token de confirmação' })
+  @ApiProperty({
+    description: 'Detalhes do cálculo de preço',
+    required: false,
+    example: {
+      finalPrice: 28.9,
+      basePrice: 8,
+      distanceCost: 15,
+      timeCost: 5.9,
+      surgeMultiplier: 1,
+      premiumFee: 0,
+      currency: 'BRL',
+      breakdown: {
+        distance: 12,
+        duration: 25,
+        rideType: 'Normal',
+        isPremiumTime: false,
+      },
+    },
+  })
+  @IsOptional()
+  priceCalculation?: any;
+
+  @ApiProperty({ description: 'Token de confirmação', required: false })
+  @IsOptional()
   @IsString()
-  confirmationToken: string;
+  confirmationToken?: string;
+
+  // Campos flat legados (compatibilidade)
+  @ApiProperty({ description: 'Endereço de origem (legado)', required: false })
+  @IsOptional()
+  @IsString()
+  originAddress?: string;
+
+  @ApiProperty({
+    description: 'Latitude de origem (legado)',
+    required: false,
+    example: -23.5505,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  originLatitude?: number;
+
+  @ApiProperty({
+    description: 'Longitude de origem (legado)',
+    required: false,
+    example: -46.6333,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  originLongitude?: number;
+
+  @ApiProperty({ description: 'Endereço de destino (legado)', required: false })
+  @IsOptional()
+  @IsString()
+  destinationAddress?: string;
+
+  @ApiProperty({
+    description: 'Latitude de destino (legado)',
+    required: false,
+    example: -23.5505,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  destinationLatitude?: number;
+
+  @ApiProperty({
+    description: 'Longitude de destino (legado)',
+    required: false,
+    example: -46.6333,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  destinationLongitude?: number;
 }

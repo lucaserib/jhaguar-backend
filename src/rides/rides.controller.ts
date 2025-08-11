@@ -9,6 +9,8 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Headers,
+  Res,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -17,6 +19,7 @@ import {
   ApiBearerAuth,
   ApiQuery,
   ApiParam,
+  ApiHeader,
 } from '@nestjs/swagger';
 import { RidesService } from './rides.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -29,6 +32,8 @@ import { StartRideDto } from './dto/start-ride.dto';
 import { CompleteRideDto } from './dto/complete-ride.dto';
 import { CancelRideDto } from './dto/cancel-ride.dto';
 import { RideStatus } from '@prisma/client';
+import { Response } from 'express';
+import { randomUUID } from 'crypto';
 
 @ApiTags('Corridas')
 @Controller('rides')
@@ -74,14 +79,72 @@ export class RidesController {
     summary: 'Criar corrida',
     description: 'Confirma e cria a corrida no sistema',
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Chave de idempotência para evitar criações duplicadas (opcional; se ausente, o servidor gera)',
+  })
   @ApiResponse({ status: 201, description: 'Corrida criada com sucesso' })
   @ApiResponse({
     status: 400,
     description: 'Dados inválidos ou token expirado',
   })
   @ApiResponse({ status: 404, description: 'Passageiro não encontrado' })
-  async createRide(@Body() createRideDto: CreateRideDto, @User() user: any) {
-    return this.ridesService.createRide(user.id, createRideDto);
+  async createRide(
+    @Body() createRideDto: CreateRideDto,
+    @User() user: any,
+    @Headers('Idempotency-Key') idemKey?: string,
+    @Res({ passthrough: true }) res?: Response,
+  ) {
+    // Gerar Idempotency-Key se ausente
+    const key = idemKey || randomUUID();
+
+    // Normalização do payload flat -> nested
+    if (
+      !createRideDto.origin &&
+      createRideDto.originLatitude !== undefined &&
+      createRideDto.originLongitude !== undefined
+    ) {
+      createRideDto.origin = {
+        latitude: Number(createRideDto.originLatitude),
+        longitude: Number(createRideDto.originLongitude),
+        address: createRideDto.originAddress || '',
+      } as any;
+    }
+    if (
+      !createRideDto.destination &&
+      createRideDto.destinationLatitude !== undefined &&
+      createRideDto.destinationLongitude !== undefined
+    ) {
+      createRideDto.destination = {
+        latitude: Number(createRideDto.destinationLatitude),
+        longitude: Number(createRideDto.destinationLongitude),
+        address: createRideDto.destinationAddress || '',
+      } as any;
+    }
+
+    // Backfill de preço estimado a partir de priceCalculation.finalPrice
+    if (
+      (createRideDto.estimatedPrice === undefined ||
+        createRideDto.estimatedPrice === null) &&
+      createRideDto.priceCalculation &&
+      typeof createRideDto.priceCalculation.finalPrice === 'number' &&
+      createRideDto.priceCalculation.finalPrice > 0
+    ) {
+      createRideDto.estimatedPrice = createRideDto.priceCalculation.finalPrice;
+    }
+
+    // Chamar service
+    const response = await this.ridesService.createRide(
+      user.id,
+      createRideDto,
+      key,
+    );
+
+    // Anexar header para rastreabilidade
+    if (res) res.setHeader('Idempotency-Key', key);
+    return response;
   }
 
   @Get('my')
@@ -165,11 +228,66 @@ export class RidesController {
   @ApiResponse({ status: 200, description: 'Corrida encontrada' })
   @ApiResponse({ status: 404, description: 'Corrida não encontrada' })
   async getRideById(@Param('id') rideId: string, @User() user: any) {
-    return {
-      success: true,
-      data: { rideId, userId: user.id },
-      message: 'Corrida encontrada',
-    };
+    return this.ridesService.getRideByIdForUser(rideId, user.id);
+  }
+
+  @Get(':id/status')
+  @ApiOperation({ summary: 'Status da corrida (polling)' })
+  @ApiParam({ name: 'id', description: 'ID da corrida' })
+  @ApiResponse({ status: 200, description: 'Status retornado com sucesso' })
+  async getRideStatus(@Param('id') rideId: string, @User() user: any) {
+    return this.ridesService.getRideStatus(rideId, user.id);
+  }
+
+  @Put(':id/rate')
+  @ApiOperation({ summary: 'Avaliar corrida' })
+  @ApiParam({ name: 'id', description: 'ID da corrida' })
+  async rateRide(
+    @Param('id') rideId: string,
+    @Body()
+    body: { rating: number; review?: string; isPassengerRating?: boolean },
+    @User() user: any,
+  ) {
+    return this.ridesService.rateRide(rideId, user.id, body);
+  }
+
+  @Post(':id/rate')
+  @ApiOperation({ summary: 'Avaliar corrida (POST alias)' })
+  @ApiParam({ name: 'id', description: 'ID da corrida' })
+  async rateRidePost(
+    @Param('id') rideId: string,
+    @Body()
+    body: { rating: number; review?: string; isPassengerRating?: boolean },
+    @User() user: any,
+  ) {
+    return this.ridesService.rateRide(rideId, user.id, body);
+  }
+
+  @Post(':id/report')
+  @ApiOperation({ summary: 'Reportar problema na corrida' })
+  @ApiParam({ name: 'id', description: 'ID da corrida' })
+  async reportRide(
+    @Param('id') rideId: string,
+    @Body()
+    body: {
+      issue: string;
+      description?: string;
+      reportedBy: 'passenger' | 'driver';
+    },
+    @User() user: any,
+  ) {
+    return this.ridesService.reportRide(rideId, user.id, body);
+  }
+
+  @Post(':id/message')
+  @ApiOperation({ summary: 'Enviar mensagem entre passageiro e motorista' })
+  @ApiParam({ name: 'id', description: 'ID da corrida' })
+  async sendMessage(
+    @Param('id') rideId: string,
+    @Body() body: { message: string; to: 'driver' | 'passenger' },
+    @User() user: any,
+  ) {
+    return this.ridesService.sendRideMessage(rideId, user.id, body);
   }
 
   @Get('test')

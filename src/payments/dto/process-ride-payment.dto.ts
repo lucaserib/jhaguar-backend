@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Min,
 } from 'class-validator';
 import { PaymentMethod } from '@prisma/client';
 
@@ -29,6 +30,7 @@ export class ProcessRidePaymentDto {
     example: 25.5,
   })
   @IsNumber()
+  @Min(0.01)
   amount: number;
 
   @ApiProperty({

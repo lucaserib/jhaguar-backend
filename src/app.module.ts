@@ -18,6 +18,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { MapsModule } from './maps/maps.module';
 import { RideTypesModule } from './ride-types/ride-types.module';
 import { StripeModule } from './stripe/stripe.module';
+import { CommonRedisService } from './common/redis/redis.service';
+import { CommonRedisModule } from './common/redis/redis.module';
 
 @Module({
   imports: [
@@ -43,6 +45,7 @@ import { StripeModule } from './stripe/stripe.module';
       },
     ]),
     PrismaModule,
+    CommonRedisModule,
     AuthModule,
     UsersModule,
     DriversModule,

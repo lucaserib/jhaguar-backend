@@ -3,11 +3,13 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MapsService } from '../maps/maps.service';
 import { RideTypesService } from '../ride-types/ride-types.service';
 import { PaymentsService } from '../payments/payments.service';
+import { IdempotencyService } from '../common/services/idempotency.service';
 import { CreateRideDto } from './dto/create-ride.dto';
 import { AcceptRideDto } from './dto/accept-ride.dto';
 import { RejectRideDto } from './dto/reject-ride.dto';
@@ -30,6 +32,7 @@ export class RidesService {
     private readonly mapsService: MapsService,
     private readonly rideTypesService: RideTypesService,
     private readonly paymentsService: PaymentsService,
+    private readonly idempotency: IdempotencyService,
   ) {
     setInterval(() => this.cleanExpiredTokens(), 5 * 60 * 1000);
   }
@@ -99,180 +102,195 @@ export class RidesService {
   async createRide(
     userId: string,
     createRideDto: CreateRideDto,
+    idempotencyKey?: string,
   ): Promise<{
     success: boolean;
     data: any;
     message: string;
   }> {
     try {
-      const tokenData = this.confirmationTokens.get(
-        createRideDto.confirmationToken,
-      );
-      if (!tokenData) {
-        throw new BadRequestException(
-          'Token de confirmação inválido ou expirado',
-        );
-      }
+      const exec = async () => {
+        const usingToken = Boolean(createRideDto.confirmationToken);
+        const tokenData = usingToken
+          ? this.confirmationTokens.get(createRideDto.confirmationToken!)
+          : null;
+        if (usingToken) {
+          if (!tokenData) {
+            throw new BadRequestException(
+              'Token de confirmação inválido ou expirado',
+            );
+          }
+          if (new Date() > tokenData.expires) {
+            this.confirmationTokens.delete(createRideDto.confirmationToken!);
+            throw new BadRequestException('Token de confirmação expirado');
+          }
+        }
 
-      if (new Date() > tokenData.expires) {
-        this.confirmationTokens.delete(createRideDto.confirmationToken);
-        throw new BadRequestException('Token de confirmação expirado');
-      }
-
-      const passenger = await this.prisma.passenger.findUnique({
-        where: { userId },
-        include: { user: true },
-      });
-
-      if (!passenger) {
-        throw new NotFoundException('Perfil de passageiro não encontrado');
-      }
-
-      let selectedDriver: any = null;
-      if (createRideDto.selectedDriverId || tokenData.data.selectedDriver) {
-        const driverId =
-          createRideDto.selectedDriverId || tokenData.data.selectedDriver.id;
-        selectedDriver = await this.prisma.driver.findUnique({
-          where: {
-            id: driverId,
-            isOnline: true,
-            isAvailable: true,
-            accountStatus: 'APPROVED',
-          },
-          include: {
-            user: true,
-            vehicle: true,
-          },
+        const passenger = await this.prisma.passenger.findUnique({
+          where: { userId },
+          include: { user: true },
         });
 
-        if (!selectedDriver) {
-          throw new BadRequestException(
-            'Motorista selecionado não está mais disponível',
-          );
+        if (!passenger) {
+          throw new NotFoundException('Perfil de passageiro não encontrado');
         }
-      }
 
-      const rideType = await this.rideTypesService.findRideTypeById(
-        createRideDto.rideTypeId,
-      );
-      const finalPricing = await this.rideTypesService.calculateRidePrice({
-        rideTypeId: createRideDto.rideTypeId,
-        distance: createRideDto.estimatedDistance,
-        duration: createRideDto.estimatedDuration,
-        surgeMultiplier: tokenData.data.pricing?.surgeMultiplier || 1.0,
-        isPremiumTime: this.isPremiumTime(),
-      });
-
-      const ride = await this.prisma.ride.create({
-        data: {
-          passengerId: passenger.id,
-          driverId: selectedDriver?.id,
-          vehicleId: selectedDriver?.vehicle?.id,
-          rideTypeConfigId: createRideDto.rideTypeId,
-          status: selectedDriver ? RideStatus.ACCEPTED : RideStatus.REQUESTED,
-
-          originAddress: createRideDto.origin.address,
-          originLatitude: createRideDto.origin.latitude,
-          originLongitude: createRideDto.origin.longitude,
-
-          destinationAddress: createRideDto.destination.address,
-          destinationLatitude: createRideDto.destination.latitude,
-          destinationLongitude: createRideDto.destination.longitude,
-
-          estimatedDistance: createRideDto.estimatedDistance,
-          estimatedDuration: createRideDto.estimatedDuration,
-          basePrice: finalPricing.basePrice,
-          finalPrice: finalPricing.finalPrice,
-
-          hasPets: createRideDto.hasPets || false,
-          petDescription: createRideDto.petDescription,
-          specialRequirements: createRideDto.specialRequirements,
-          baggageQuantity: createRideDto.baggageQuantity || 0,
-          scheduledTime: createRideDto.scheduledTime
-            ? new Date(createRideDto.scheduledTime)
-            : null,
-
-          isFemaleOnlyRide: rideType.femaleOnly,
-          isDelivery: rideType.isDeliveryOnly,
-
-          acceptTime: selectedDriver ? new Date() : null,
-        },
-        include: {
-          passenger: {
-            include: { user: true },
-          },
-          driver: {
+        let selectedDriver: any = null;
+        if (
+          createRideDto.selectedDriverId ||
+          (tokenData && tokenData.data.selectedDriver)
+        ) {
+          const driverId =
+            createRideDto.selectedDriverId || tokenData!.data.selectedDriver.id;
+          selectedDriver = await this.prisma.driver.findUnique({
+            where: {
+              id: driverId,
+              isOnline: true,
+              isAvailable: true,
+              accountStatus: 'APPROVED',
+            },
             include: {
               user: true,
               vehicle: true,
             },
-          },
-          RideTypeConfig: true,
-        },
-      });
+          });
 
-      if (selectedDriver) {
-        await this.prisma.driver.update({
-          where: { id: selectedDriver.id },
+          if (!selectedDriver) {
+            throw new BadRequestException(
+              'Motorista selecionado não está mais disponível',
+            );
+          }
+        }
+
+        const rideType = await this.rideTypesService.findRideTypeById(
+          createRideDto.rideTypeId,
+        );
+
+        // Validar presença de origem/destino
+        if (!createRideDto.origin || !createRideDto.destination) {
+          throw new BadRequestException('Origem e destino são obrigatórios');
+        }
+
+        // Calcular preço final do sistema
+        const finalPricing = await this.rideTypesService.calculateRidePrice({
+          rideTypeId: createRideDto.rideTypeId,
+          distance: createRideDto.estimatedDistance,
+          duration: createRideDto.estimatedDuration,
+          surgeMultiplier: tokenData?.data?.pricing?.surgeMultiplier || 1.0,
+          isPremiumTime: this.isPremiumTime(),
+        });
+
+        // Garantir preço estimado positivo (fallback se enviado)
+        const effectiveEstimated =
+          createRideDto.estimatedPrice ?? finalPricing.finalPrice;
+        if (!effectiveEstimated || effectiveEstimated <= 0) {
+          throw new BadRequestException('Preço estimado inválido');
+        }
+
+        const ride = await this.prisma.ride.create({
           data: {
-            isAvailable: false,
-            isActiveTrip: true,
+            passengerId: passenger.id,
+            driverId: selectedDriver?.id,
+            vehicleId: selectedDriver?.vehicle?.id,
+            rideTypeConfigId: createRideDto.rideTypeId,
+            status: selectedDriver ? RideStatus.ACCEPTED : RideStatus.REQUESTED,
+
+            originAddress: createRideDto.origin.address,
+            originLatitude: createRideDto.origin.latitude,
+            originLongitude: createRideDto.origin.longitude,
+
+            destinationAddress: createRideDto.destination.address,
+            destinationLatitude: createRideDto.destination.latitude,
+            destinationLongitude: createRideDto.destination.longitude,
+
+            estimatedDistance: createRideDto.estimatedDistance,
+            estimatedDuration: createRideDto.estimatedDuration,
+            basePrice: finalPricing.basePrice,
+            finalPrice: finalPricing.finalPrice,
+
+            hasPets: createRideDto.hasPets || false,
+            petDescription: createRideDto.petDescription,
+            specialRequirements: createRideDto.specialRequirements,
+            baggageQuantity: createRideDto.baggageQuantity || 0,
+            scheduledTime: createRideDto.scheduledTime
+              ? new Date(createRideDto.scheduledTime)
+              : null,
+
+            isFemaleOnlyRide: rideType.femaleOnly,
+            isDelivery: rideType.isDeliveryOnly,
+
+            acceptTime: selectedDriver ? new Date() : null,
+          },
+          include: {
+            passenger: {
+              include: { user: true },
+            },
+            driver: {
+              include: {
+                user: true,
+                vehicle: true,
+              },
+            },
+            RideTypeConfig: true,
           },
         });
-      }
 
-      this.confirmationTokens.delete(createRideDto.confirmationToken);
+        if (selectedDriver) {
+          await this.prisma.driver.update({
+            where: { id: selectedDriver.id },
+            data: {
+              isAvailable: false,
+              isActiveTrip: true,
+            },
+          });
+        }
 
-      // NOVO: Criar registro de pagamento inicial
-      await this.prisma.payment.create({
-        data: {
-          rideId: ride.id,
-          amount: finalPricing.finalPrice,
-          status: PaymentStatus.PENDING,
-          method: PaymentMethod.CASH, // Valor padrão, será atualizado quando o usuário escolher
-        },
-      });
+        if (usingToken) {
+          this.confirmationTokens.delete(createRideDto.confirmationToken!);
+        }
 
-      if (!selectedDriver) {
-        await this.notifyNearbyDrivers(ride);
-      }
-
-      // NOVO: Incluir informações de pagamento na resposta
-      const paymentMethods =
-        await this.paymentsService.getPaymentMethods(userId);
-      const walletBalance = await this.paymentsService.getWalletBalance(userId);
-
-      return {
-        success: true,
-        data: {
-          rideId: ride.id,
-          status: ride.status,
-          driver: selectedDriver
-            ? {
-                id: selectedDriver.id,
-                name: `${selectedDriver.user.firstName} ${selectedDriver.user.lastName}`,
-                rating: selectedDriver.averageRating,
-                phone: selectedDriver.user.phone,
-                vehicle: selectedDriver.vehicle,
-              }
-            : null,
-          pricing: {
-            finalPrice: finalPricing.finalPrice,
-            currency: 'BRL',
-            breakdown: finalPricing.breakdown,
-          },
-          payment: {
-            methods: paymentMethods,
-            walletBalance,
-            requiresPayment: true,
+        // NOVO: Criar registro de pagamento inicial
+        await this.prisma.payment.create({
+          data: {
+            rideId: ride.id,
             amount: finalPricing.finalPrice,
+            status: PaymentStatus.PENDING,
+            method: PaymentMethod.CASH, // Valor padrão, será atualizado quando o usuário escolher
           },
-          estimatedArrival: selectedDriver ? 8 : null,
-        },
-        message: selectedDriver
-          ? 'Corrida criada e aceita pelo motorista'
-          : 'Corrida criada, buscando motorista disponível',
+        });
+
+        if (!selectedDriver) {
+          await this.notifyNearbyDrivers(ride);
+        }
+
+        // NOVO: Incluir informações de pagamento na resposta
+        const paymentMethods =
+          await this.paymentsService.getPaymentMethods(userId);
+        const walletBalance =
+          await this.paymentsService.getWalletBalance(userId);
+
+        return {
+          success: true,
+          data: {
+            id: ride.id,
+            status: ride.status,
+            createdAt: ride.createdAt,
+          },
+          message: selectedDriver
+            ? 'Corrida criada e aceita pelo motorista'
+            : 'Corrida criada, buscando motorista disponível',
+        };
       };
+
+      if (idempotencyKey) {
+        return await this.idempotency.getOrSet(
+          `rides:create:${userId}:${idempotencyKey}`,
+          10 * 60 * 1000,
+          exec,
+        );
+      }
+
+      return await exec();
     } catch (error) {
       this.logger.error('Erro ao criar corrida:', error);
       return {
@@ -282,6 +300,232 @@ export class RidesService {
           error instanceof Error ? error.message : 'Erro ao criar corrida',
       };
     }
+  }
+
+  async getRideByIdForUser(rideId: string, userId: string) {
+    const ride = await this.prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        OR: [{ passenger: { userId } }, { driver: { userId } }],
+      },
+      include: {
+        passenger: { include: { user: true } },
+        driver: { include: { user: true, vehicle: true } },
+        RideTypeConfig: true,
+      },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Corrida não encontrada ou acesso negado');
+    }
+
+    return {
+      success: true,
+      data: {
+        id: ride.id,
+        status: ride.status,
+        passenger: {
+          id: ride.passenger.id,
+          user: {
+            firstName: ride.passenger.user.firstName,
+            lastName: ride.passenger.user.lastName,
+            phone: ride.passenger.user.phone,
+            profileImage: ride.passenger.user.profileImage,
+          },
+          averageRating: ride.passenger.averageRating,
+          totalRides: ride.passenger.totalRides,
+        },
+        driver: ride.driver
+          ? {
+              id: ride.driver.id,
+              user: {
+                firstName: ride.driver.user.firstName,
+                lastName: ride.driver.user.lastName,
+                phone: ride.driver.user.phone,
+                profileImage: ride.driver.user.profileImage,
+              },
+              averageRating: ride.driver.averageRating,
+              totalRides: ride.driver.totalRides,
+              vehicle: ride.driver.vehicle
+                ? {
+                    model: ride.driver.vehicle.model,
+                    color: ride.driver.vehicle.color,
+                    licensePlate: ride.driver.vehicle.licensePlate,
+                    carImageUrl: ride.driver.vehicle.carImageUrl || undefined,
+                  }
+                : null,
+            }
+          : null,
+        originAddress: ride.originAddress,
+        originLatitude: ride.originLatitude,
+        originLongitude: ride.originLongitude,
+        destinationAddress: ride.destinationAddress,
+        destinationLatitude: ride.destinationLatitude,
+        destinationLongitude: ride.destinationLongitude,
+        estimatedArrival: ride.acceptTime
+          ? new Date(ride.acceptTime.getTime() + 8 * 60 * 1000)
+          : null,
+        estimatedDuration: ride.estimatedDuration,
+        distanceToDestination: ride.actualDistance || null,
+        createdAt: ride.createdAt,
+        acceptedAt: ride.acceptTime,
+        startedAt: ride.pickupTime,
+        completedAt: ride.dropOffTime,
+        estimatedPrice: ride.finalPrice || ride.basePrice,
+        finalPrice: ride.finalPrice || null,
+        rideType: ride.RideTypeConfig
+          ? {
+              id: ride.RideTypeConfig.id,
+              name: ride.RideTypeConfig.name,
+              icon: ride.RideTypeConfig.icon,
+            }
+          : null,
+        specialRequirements: ride.specialRequirements,
+        hasPets: ride.hasPets,
+        rating: null,
+      },
+    };
+  }
+
+  async getRideStatus(rideId: string, userId: string) {
+    const ride = await this.prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        OR: [{ passenger: { userId } }, { driver: { userId } }],
+      },
+      include: { driver: true },
+    });
+    if (!ride) throw new NotFoundException('Corrida não encontrada');
+
+    let driverLocation: { latitude: number; longitude: number } | undefined;
+    if (ride.driverId) {
+      const loc = await this.mapsService.getDriverLocationFromDatabase(
+        ride.driverId,
+      );
+      if (loc)
+        driverLocation = {
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+        } as any;
+    }
+
+    const estimatedArrival = ride.acceptTime
+      ? new Date(ride.acceptTime.getTime() + 7 * 60 * 1000)
+      : null;
+
+    return {
+      success: true,
+      data: {
+        status: ride.status,
+        driverLocation,
+        estimatedArrival,
+      },
+    };
+  }
+
+  async rateRide(
+    rideId: string,
+    userId: string,
+    body: { rating: number; review?: string; isPassengerRating?: boolean },
+  ) {
+    const ride = await this.prisma.ride.findUnique({ where: { id: rideId } });
+    if (!ride) throw new NotFoundException('Corrida não encontrada');
+
+    const isPassengerRating = body.isPassengerRating !== false;
+    const passenger = await this.prisma.passenger.findUnique({
+      where: { id: ride.passengerId },
+    });
+    const driver = ride.driverId
+      ? await this.prisma.driver.findUnique({ where: { id: ride.driverId } })
+      : null;
+
+    const ratedUserId = isPassengerRating ? driver?.userId : passenger?.userId;
+    if (!ratedUserId) throw new BadRequestException('Parte avaliada inválida');
+
+    const rating = await this.prisma.rating.create({
+      data: {
+        rideId,
+        ratedByUserId: userId,
+        ratedUserId,
+        rating: body.rating,
+        review: body.review,
+      },
+    });
+
+    return { success: true, data: { ratingId: rating.id } };
+  }
+
+  async reportRide(
+    rideId: string,
+    userId: string,
+    body: {
+      issue: string;
+      description?: string;
+      reportedBy: 'passenger' | 'driver';
+    },
+  ) {
+    const ride = await this.prisma.ride.findUnique({ where: { id: rideId } });
+    if (!ride) throw new NotFoundException('Corrida não encontrada');
+
+    const actorIsPassenger = body.reportedBy === 'passenger';
+    const actorValid = actorIsPassenger
+      ? await this.prisma.passenger.findFirst({
+          where: { userId, id: ride.passengerId },
+        })
+      : await this.prisma.driver.findFirst({
+          where: { userId, id: ride.driverId || '' },
+        });
+    if (!actorValid) throw new ForbiddenException('Acesso negado');
+
+    const record = await this.prisma.rideStatusHistory.create({
+      data: {
+        rideId,
+        driverId:
+          ride.driverId ||
+          (await this.prisma.driver.findFirst({ where: { userId } }))?.id ||
+          userId,
+        previousStatus: ride.status,
+        newStatus: 'REPORTED',
+        notes: JSON.stringify({
+          issue: body.issue,
+          description: body.description,
+          by: body.reportedBy,
+        }),
+      },
+    });
+    return { success: true, data: { id: record.id } };
+  }
+
+  async sendRideMessage(
+    rideId: string,
+    userId: string,
+    body: { message: string; to: 'driver' | 'passenger' },
+  ) {
+    const ride = await this.prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        OR: [{ passenger: { userId } }, { driver: { userId } }],
+      },
+      include: {
+        passenger: { include: { user: true } },
+        driver: { include: { user: true } },
+      },
+    });
+    if (!ride) throw new NotFoundException('Corrida não encontrada');
+
+    await this.prisma.rideStatusHistory.create({
+      data: {
+        rideId,
+        driverId:
+          ride.driverId ||
+          (await this.prisma.driver.findFirst({ where: { userId } }))?.id ||
+          userId,
+        previousStatus: ride.status,
+        newStatus: 'MESSAGE',
+        notes: JSON.stringify({ message: body.message, to: body.to }),
+      },
+    });
+    return { success: true };
   }
 
   // ==================== FINALIZAÇÃO DA CORRIDA ====================

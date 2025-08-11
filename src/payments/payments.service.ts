@@ -6,6 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { IdempotencyService } from '../common/services/idempotency.service';
 import { ConfigService } from '@nestjs/config';
 import {
   AddWalletBalanceDto,
@@ -36,6 +37,7 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly idempotency?: IdempotencyService,
   ) {
     const stripeKey = this.configService.get<string>('STRIPE_SECRET_KEY');
 
@@ -522,13 +524,15 @@ export class PaymentsService {
   async processRidePayment(
     userId: string,
     processPaymentDto: ProcessRidePaymentDto,
+    idempotencyKey?: string,
   ): Promise<{
     success: boolean;
     data: any;
     message: string;
   }> {
     try {
-      const ride = await this.prisma.ride.findFirst({
+      const exec = async () => {
+        const ride = await this.prisma.ride.findFirst({
         where: {
           id: processPaymentDto.rideId,
           passenger: { userId },
@@ -558,6 +562,17 @@ export class PaymentsService {
       );
 
       return result;
+      };
+
+      if (idempotencyKey && this.idempotency) {
+        return await this.idempotency.getOrSet(
+          `payments:ridepay:${userId}:${idempotencyKey}`,
+          10 * 60 * 1000,
+          exec,
+        );
+      }
+
+      return await exec();
     } catch (error) {
       this.logger.error('Erro ao processar pagamento da corrida:', error);
 

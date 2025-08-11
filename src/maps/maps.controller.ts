@@ -258,12 +258,10 @@ export class MapsController {
         message: 'Rota calculada com sucesso',
       };
     } catch (error) {
-      return {
-        success: false,
-        data: null,
-        message:
-          error instanceof Error ? error.message : 'Erro ao calcular rota',
-      };
+      // Em caso de falha de provedor externo, retornar 502 compatível
+      throw new (require('@nestjs/common').BadGatewayException)(
+        'Falha ao calcular rota com provedor externo',
+      );
     }
   }
 

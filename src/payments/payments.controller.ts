@@ -13,6 +13,7 @@ import {
   HttpStatus,
   BadRequestException,
   Logger,
+  Res,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -24,6 +25,8 @@ import {
   ApiHeader,
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
+import { Response } from 'express';
+import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { User } from '../auth/decorator/user.decorator';
 import {
@@ -514,6 +517,12 @@ export class PaymentsController {
     description:
       'Processa o pagamento de uma corrida usando o método escolhido pelo passageiro',
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Chave de idempotência para evitar pagamentos duplicados (opcional; se ausente, o servidor gera)',
+  })
   @ApiResponse({
     status: 200,
     description: 'Pagamento processado com sucesso',
@@ -529,8 +538,17 @@ export class PaymentsController {
   async processRidePayment(
     @Body() processPaymentDto: ProcessRidePaymentDto,
     @User() user: any,
+    @Headers('Idempotency-Key') idemKey?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
-    return this.paymentsService.processRidePayment(user.id, processPaymentDto);
+    const key = idemKey || randomUUID();
+    const result = await this.paymentsService.processRidePayment(
+      user.id,
+      processPaymentDto,
+      key,
+    );
+    if (res) res.setHeader('Idempotency-Key', key);
+    return result;
   }
 
   @Put('ride/:rideId/confirm')

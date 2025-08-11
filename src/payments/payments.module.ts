@@ -2,6 +2,8 @@ import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { IdempotencyService } from '../common/services/idempotency.service';
+import { CommonRedisModule } from '../common/redis/redis.module';
 
 import { PaymentsController } from './payments.controller';
 import { FeeManagementController } from './fee-management.controller';
@@ -14,11 +16,12 @@ import { FeeStatusGuard } from './guards/fee-status.guard';
 import { BalanceValidationMiddleware } from './middleware/balance-validation.middleware';
 
 @Module({
-  imports: [ConfigModule, ScheduleModule.forRoot()],
+  imports: [ConfigModule, ScheduleModule.forRoot(), CommonRedisModule],
   controllers: [PaymentsController, FeeManagementController],
   providers: [
     PaymentsService,
     FeeManagementService,
+    IdempotencyService,
 
     // Interceptor global para cobrança automática
     {
