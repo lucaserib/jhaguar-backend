@@ -31,17 +31,17 @@ import { CommonRedisModule } from './common/redis/redis.module';
       {
         name: 'short',
         ttl: 1000, // 1 second
-        limit: 3, // 3 requests per second (global default)
+        limit: 100, // 100 requests per second (mais permissivo para maps/location)
       },
       {
         name: 'medium',
         ttl: 10000, // 10 seconds
-        limit: 20, // 20 requests per 10 seconds
+        limit: 500, // 500 requests per 10 seconds (mais permissivo)
       },
       {
         name: 'long',
         ttl: 60000, // 1 minute
-        limit: 100, // 100 requests per minute
+        limit: 2000, // 2000 requests per minute (mais permissivo)
       },
     ]),
     PrismaModule,

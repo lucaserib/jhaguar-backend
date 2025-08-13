@@ -7,7 +7,7 @@ export class CommonRedisService {
   private client: RedisClient | null = null;
 
   constructor() {
-    const host = process.env.REDIS_HOST || 'localhost';
+    const host = process.env.REDIS_HOST || process.env.REDIS_URL?.split('://')[1]?.split(':')[0] || 'redis';
     const port = process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379;
     const password = process.env.REDIS_PASSWORD || undefined;
 

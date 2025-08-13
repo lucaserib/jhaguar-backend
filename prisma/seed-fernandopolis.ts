@@ -213,12 +213,37 @@ async function main() {
 
   console.log('👤 Criando motoristas em Fernandópolis...');
 
-  await prisma.vehicle.deleteMany({});
-  await prisma.driver.deleteMany({});
-  await prisma.passenger.deleteMany({});
-  await prisma.user.deleteMany({});
+  // Em vez de deletar tudo, vamos apenas apagar os dados de Fernandópolis (se existirem)
+  // e adicionar os novos sem interferir nos dados de seed originais
+  
+  // Primeiro, vamos deletar apenas os motoristas que foram criados por este seed
+  const fernandopolisEmails = driversData.map(d => d.personal.email);
+  
+  // Buscar usuários/motoristas existentes com esses emails
+  const existingUsers = await prisma.user.findMany({
+    where: { email: { in: fernandopolisEmails } },
+    include: { driver: true, passenger: true, wallet: true }
+  });
 
-  console.log('🗑️ Dados anteriores removidos');
+  // Deletar apenas os registros relacionados aos emails de Fernandópolis
+  for (const user of existingUsers) {
+    if (user.driver) {
+      await prisma.driverRideType.deleteMany({ where: { driverId: user.driver.id } });
+      await prisma.vehicle.deleteMany({ where: { driverId: user.driver.id } });
+      await prisma.driver.delete({ where: { id: user.driver.id } });
+    }
+    if (user.passenger) {
+      await prisma.passenger.delete({ where: { id: user.passenger.id } });
+    }
+    if (user.wallet) {
+      await prisma.transaction.deleteMany({ where: { walletId: user.wallet.id } });
+      await prisma.userWallet.delete({ where: { id: user.wallet.id } });
+    }
+    await prisma.transaction.deleteMany({ where: { userId: user.id } });
+    await prisma.user.delete({ where: { id: user.id } });
+  }
+
+  console.log(`🗑️ Dados anteriores de Fernandópolis removidos (${existingUsers.length} usuários)`);
 
   for (let i = 0; i < driversData.length; i++) {
     const driverData = driversData[i];
@@ -349,6 +374,96 @@ async function main() {
     }
   }
 
+  // ==================== ASSOCIAR TIPOS DE CORRIDA AOS MOTORISTAS ====================
+  console.log('\n🔗 Associando tipos de corrida aos motoristas...');
+
+  // Buscar todos os tipos de corrida disponíveis
+  const rideTypes = await prisma.rideTypeConfig.findMany({
+    where: { isActive: true },
+  });
+
+  console.log(`📋 Tipos disponíveis: ${rideTypes.map(rt => rt.name).join(', ')}`);
+
+  // Buscar todos os motoristas criados
+  const allDrivers = await prisma.driver.findMany({
+    include: { user: true, vehicle: true },
+  });
+
+  for (const driver of allDrivers) {
+    try {
+      // Definir tipos baseado no perfil do motorista
+      let typesToAssociate: string[] = [];
+
+      // Todos recebem NORMAL
+      const normalType = rideTypes.find(rt => rt.type === 'NORMAL');
+      if (normalType) {
+        typesToAssociate.push(normalType.id);
+      }
+
+      // Motoristas mulheres podem fazer corridas MULHER
+      if (driver.user.gender === Gender.FEMALE) {
+        const mulherType = rideTypes.find(rt => rt.type === 'MULHER');
+        if (mulherType) {
+          typesToAssociate.push(mulherType.id);
+        }
+      }
+
+      // Veículos pet-friendly podem fazer PET
+      if (driver.vehicle?.isPetFriendly) {
+        const petType = rideTypes.find(rt => rt.type === 'PET');
+        if (petType) {
+          typesToAssociate.push(petType.id);
+        }
+      }
+
+      // Veículos de luxo podem fazer EXECUTIVO
+      if (driver.vehicle?.isLuxury || driver.vehicle?.vehicleType === VehicleType.LUXURY) {
+        const executivoType = rideTypes.find(rt => rt.type === 'EXECUTIVO');
+        if (executivoType) {
+          typesToAssociate.push(executivoType.id);
+        }
+      }
+
+      // Motocicletas podem fazer MOTO e DELIVERY
+      if (driver.vehicle?.isMotorcycle || driver.vehicle?.vehicleType === VehicleType.MOTORCYCLE) {
+        const motoType = rideTypes.find(rt => rt.type === 'MOTO');
+        const deliveryType = rideTypes.find(rt => rt.type === 'DELIVERY');
+        if (motoType) typesToAssociate.push(motoType.id);
+        if (deliveryType) typesToAssociate.push(deliveryType.id);
+      }
+
+      // Veículos blindados podem fazer BLINDADO
+      if (driver.vehicle?.isArmored) {
+        const blindadoType = rideTypes.find(rt => rt.type === 'BLINDADO');
+        if (blindadoType) {
+          typesToAssociate.push(blindadoType.id);
+        }
+      }
+
+      // Criar associações
+      for (const rideTypeId of typesToAssociate) {
+        await prisma.driverRideType.upsert({
+          where: {
+            driverId_rideTypeId: { 
+              driverId: driver.id, 
+              rideTypeId: rideTypeId 
+            },
+          },
+          update: { isActive: true },
+          create: { 
+            driverId: driver.id, 
+            rideTypeId: rideTypeId,
+            isActive: true
+          },
+        });
+      }
+
+      console.log(`✅ ${driver.user.firstName}: ${typesToAssociate.length} tipos associados`);
+    } catch (error) {
+      console.error(`❌ Erro ao associar tipos para ${driver.user.firstName}:`, error);
+    }
+  }
+
   const totalDrivers = await prisma.driver.count();
   const onlineDrivers = await prisma.driver.count({
     where: { isOnline: true },
@@ -357,10 +472,17 @@ async function main() {
     where: { isOnline: true, isAvailable: true },
   });
 
+  // Contar associações
+  const totalAssociations = await prisma.driverRideType.count();
+  const activeAssociations = await prisma.driverRideType.count({
+    where: { isActive: true },
+  });
+
   console.log('\n📊 Estatísticas do Seed:');
   console.log(`Total de motoristas: ${totalDrivers}`);
   console.log(`Motoristas online: ${onlineDrivers}`);
   console.log(`Motoristas disponíveis: ${availableDrivers}`);
+  console.log(`Associações de tipos: ${activeAssociations}/${totalAssociations}`);
   console.log('\n🎉 Seed para Fernandópolis concluído com sucesso!');
 }
 

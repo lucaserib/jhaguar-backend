@@ -17,12 +17,48 @@ export class PassengersService {
       );
     }
 
+    // Verificar se passageiro já existe
+    const existingPassenger = await this.findByUserId(createPassengerDto.userId);
+    if (existingPassenger) {
+      // Atualizar dados se necessário e retornar o existente
+      return this.prisma.passenger.update({
+        where: { userId: createPassengerDto.userId },
+        data: {
+          prefersFemaleDriver: createPassengerDto.prefersFemaleDriver || existingPassenger.prefersFemaleDriver,
+          specialNeeds: createPassengerDto.specialNeeds || existingPassenger.specialNeeds,
+          specialNeedsDesc: createPassengerDto.specialNeedsDesc || existingPassenger.specialNeedsDesc,
+        },
+        include: {
+          user: {
+            select: {
+              firstName: true,
+              lastName: true,
+              email: true,
+              phone: true,
+              profileImage: true,
+            },
+          },
+        },
+      });
+    }
+
     return this.prisma.passenger.create({
       data: {
         userId: createPassengerDto.userId,
         prefersFemaleDriver: createPassengerDto.prefersFemaleDriver || false,
         specialNeeds: createPassengerDto.specialNeeds || false,
         specialNeedsDesc: createPassengerDto.specialNeedsDesc,
+      },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            profileImage: true,
+          },
+        },
       },
     });
   }

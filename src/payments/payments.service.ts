@@ -73,13 +73,27 @@ export class PaymentsService {
     }
 
     if (!user.wallet) {
-      const wallet = await this.prisma.userWallet.create({
-        data: {
-          userId,
-          balance: 0.0,
-        },
-      });
-      return wallet;
+      try {
+        const wallet = await this.prisma.userWallet.create({
+          data: {
+            userId,
+            balance: 0.0,
+          },
+        });
+        return wallet;
+      } catch (error: any) {
+        // Se for erro de constraint unique, tenta buscar a wallet existente
+        if (error.code === 'P2002' && error.meta?.target?.includes('userId')) {
+          this.logger.warn(`Wallet já existe para usuário ${userId}, buscando...`);
+          const existingWallet = await this.prisma.userWallet.findUnique({
+            where: { userId },
+          });
+          if (existingWallet) {
+            return existingWallet;
+          }
+        }
+        throw error;
+      }
     }
 
     return user.wallet;

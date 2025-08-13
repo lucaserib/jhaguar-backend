@@ -257,61 +257,108 @@ export class RideTypesService {
   async calculateRidePrice(
     calculateDto: CalculateRidePriceDto,
   ): Promise<RidePriceCalculationResponse> {
-    const rideType = await this.findRideTypeById(calculateDto.rideTypeId);
+    try {
+      const rideType = await this.findRideTypeById(calculateDto.rideTypeId);
 
-    const {
-      distance,
-      duration,
-      surgeMultiplier = 1.0,
-      isPremiumTime = false,
-    } = calculateDto;
+      let {
+        distance,
+        duration,
+        surgeMultiplier = 1.0,
+        isPremiumTime = false,
+      } = calculateDto;
 
-    if (rideType.maxDistance && distance > rideType.maxDistance) {
-      throw new BadRequestException(
-        `Distância ${(distance / 1000).toFixed(1)}km excede o máximo permitido de ${(rideType.maxDistance / 1000).toFixed(1)}km para ${rideType.name}`,
+      // Validação e sanitização de inputs
+      if (!distance || distance <= 0 || isNaN(distance)) {
+        this.logger.warn(`Distância inválida recebida: ${distance}`);
+        throw new BadRequestException('Distância inválida');
+      }
+
+      if (!duration || duration <= 0 || isNaN(duration)) {
+        this.logger.warn(`Duração inválida recebida: ${duration}`);
+        throw new BadRequestException('Duração inválida');
+      }
+
+      // Converter e validar entradas
+      const distanceInMeters =
+        typeof distance === 'string'
+          ? parseFloat(String(distance).replace(/[^\d.]/g, '')) * 1000
+          : Number(distance);
+      const durationInSeconds =
+        typeof duration === 'string'
+          ? parseFloat(String(duration).replace(/[^\d.]/g, '')) * 60
+          : Number(duration);
+
+      if (rideType.maxDistance && distanceInMeters > rideType.maxDistance) {
+        throw new BadRequestException(
+          `Distância ${(distanceInMeters / 1000).toFixed(1)}km excede o máximo permitido de ${(rideType.maxDistance / 1000).toFixed(1)}km para ${rideType.name}`,
+        );
+      }
+
+      if (rideType.minDistance && distanceInMeters < rideType.minDistance) {
+        throw new BadRequestException(
+          `Distância ${(distanceInMeters / 1000).toFixed(1)}km é menor que o mínimo permitido de ${(rideType.minDistance / 1000).toFixed(1)}km para ${rideType.name}`,
+        );
+      }
+
+      const distanceKm = Math.max(distanceInMeters / 1000, 0.1); // Mínimo 100m
+      const durationMinutes = Math.max(durationInSeconds / 60, 1); // Mínimo 1 minuto
+
+      const baseCost = rideType.basePrice || 8.0;
+      const distanceCost = distanceKm * (rideType.pricePerKm || 2.5);
+      const timeCost = durationMinutes * (rideType.pricePerMinute || 0.5);
+
+      let subtotal = baseCost + distanceCost + timeCost;
+
+      const appliedSurge = Math.max(
+        surgeMultiplier,
+        rideType.surgeMultiplier || 1.0,
       );
-    }
+      subtotal *= appliedSurge;
 
-    if (rideType.minDistance && distance < rideType.minDistance) {
-      throw new BadRequestException(
-        `Distância ${(distance / 1000).toFixed(1)}km é menor que o mínimo permitido de ${(rideType.minDistance / 1000).toFixed(1)}km para ${rideType.name}`,
+      const premiumFee = isPremiumTime ? subtotal * 0.15 : 0;
+
+      const finalPrice = Math.max(
+        subtotal + premiumFee,
+        (rideType.minimumPrice || baseCost) * appliedSurge,
       );
+
+      const result = {
+        finalPrice: Math.round(finalPrice * 100) / 100,
+        basePrice: rideType.basePrice || 8.0,
+        distanceCost: Math.round(distanceCost * 100) / 100,
+        timeCost: Math.round(timeCost * 100) / 100,
+        surgeMultiplier: appliedSurge,
+        premiumFee: Math.round(premiumFee * 100) / 100,
+        currency: 'BRL',
+        breakdown: {
+          distance: distanceKm,
+          duration: durationMinutes,
+          rideType: rideType.name,
+          isPremiumTime,
+        },
+      };
+
+      // Validação final para garantir que o preço não é zero ou inválido
+      if (
+        !result.finalPrice ||
+        result.finalPrice <= 0 ||
+        isNaN(result.finalPrice)
+      ) {
+        this.logger.error(
+          `Preço final inválido calculado: ${result.finalPrice}`,
+        );
+        throw new BadRequestException('Preço final inválido');
+      }
+
+      this.logger.log(
+        `💰 Preço calculado: R$ ${result.finalPrice} para ${rideType.name} (${distanceKm}km, ${durationMinutes}min)`,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.error('Erro no cálculo de preço:', error);
+      throw error;
     }
-
-    const distanceKm = distance / 1000;
-    const durationMinutes = duration / 60;
-
-    const baseCost = rideType.basePrice;
-    const distanceCost = distanceKm * rideType.pricePerKm;
-    const timeCost = durationMinutes * rideType.pricePerMinute;
-
-    let subtotal = baseCost + distanceCost + timeCost;
-
-    const appliedSurge = Math.max(surgeMultiplier, rideType.surgeMultiplier);
-    subtotal *= appliedSurge;
-
-    const premiumFee = isPremiumTime ? subtotal * 0.15 : 0;
-
-    const finalPrice = Math.max(
-      subtotal + premiumFee,
-      rideType.minimumPrice * appliedSurge,
-    );
-
-    return {
-      finalPrice: Math.round(finalPrice * 100) / 100,
-      basePrice: rideType.basePrice,
-      distanceCost: Math.round(distanceCost * 100) / 100,
-      timeCost: Math.round(timeCost * 100) / 100,
-      surgeMultiplier: appliedSurge,
-      premiumFee: Math.round(premiumFee * 100) / 100,
-      currency: 'BRL',
-      breakdown: {
-        distance: distanceKm,
-        duration: durationMinutes,
-        rideType: rideType.name,
-        isPremiumTime,
-      },
-    };
   }
 
   async addDriverRideType(

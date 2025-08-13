@@ -4,12 +4,16 @@ import {
   BadRequestException,
   Logger,
   ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MapsService } from '../maps/maps.service';
 import { RideTypesService } from '../ride-types/ride-types.service';
 import { PaymentsService } from '../payments/payments.service';
 import { IdempotencyService } from '../common/services/idempotency.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { RideGateway } from './rides.gateway';
 import { CreateRideDto } from './dto/create-ride.dto';
 import { AcceptRideDto } from './dto/accept-ride.dto';
 import { RejectRideDto } from './dto/reject-ride.dto';
@@ -33,6 +37,10 @@ export class RidesService {
     private readonly rideTypesService: RideTypesService,
     private readonly paymentsService: PaymentsService,
     private readonly idempotency: IdempotencyService,
+    @Inject(forwardRef(() => RideGateway))
+    private readonly rideGateway: RideGateway,
+    @Inject(forwardRef(() => NotificationsService))
+    private readonly notificationsService: NotificationsService,
   ) {
     setInterval(() => this.cleanExpiredTokens(), 5 * 60 * 1000);
   }
@@ -180,6 +188,27 @@ export class RidesService {
           isPremiumTime: this.isPremiumTime(),
         });
 
+        // Verificar se o passageiro já tem uma corrida pendente
+        const existingRide = await this.prisma.ride.findFirst({
+          where: {
+            passengerId: passenger.id,
+            status: {
+              in: [
+                RideStatus.REQUESTED,
+                RideStatus.ACCEPTED,
+                RideStatus.IN_PROGRESS,
+              ],
+            },
+          },
+        });
+
+        if (existingRide) {
+          this.logger.warn(
+            `Passageiro ${passenger.id} já tem corrida ativa: ${existingRide.id}`,
+          );
+          throw new BadRequestException('Você já tem uma corrida em andamento');
+        }
+
         // Garantir preço estimado positivo (fallback se enviado)
         const effectiveEstimated =
           createRideDto.estimatedPrice ?? finalPricing.finalPrice;
@@ -260,7 +289,15 @@ export class RidesService {
         });
 
         if (!selectedDriver) {
-          await this.notifyNearbyDrivers(ride);
+          try {
+            await this.notifyNearbyDrivers(ride);
+          } catch (notifyError) {
+            this.logger.warn(
+              'Erro ao notificar motoristas próximos:',
+              notifyError,
+            );
+            // Não falha a criação da corrida se notificação falhar
+          }
         }
 
         // NOVO: Incluir informações de pagamento na resposta
@@ -690,7 +727,9 @@ export class RidesService {
         this.prisma.ride.count({ where: whereClause }),
       ]);
 
-      const formattedRides = rides.map((ride) => this.formatRideResponse(ride));
+      const formattedRides = rides.map((ride) =>
+        this.formatRideResponseDetailed(ride),
+      );
 
       return {
         success: true,
@@ -836,7 +875,7 @@ export class RidesService {
 
   // ==================== UTILITÁRIOS ATUALIZADOS ====================
 
-  private formatRideResponse(ride: any): any {
+  private formatRideResponseDetailed(ride: any): any {
     return {
       id: ride.id,
       status: ride.status,
@@ -968,6 +1007,73 @@ export class RidesService {
       this.logger.log(
         `Notificando ${nearbyDrivers.length} motoristas sobre nova corrida ${ride.id}`,
       );
+
+      if (nearbyDrivers.length > 0) {
+        // Preparar dados da corrida para os motoristas
+        const rideRequestData = {
+          id: ride.id,
+          passengerId: ride.passengerId,
+          passengerName: ride.passenger?.user?.firstName || 'Passageiro',
+          originAddress: ride.originAddress,
+          destinationAddress: ride.destinationAddress,
+          originLatitude: ride.originLatitude,
+          originLongitude: ride.originLongitude,
+          destinationLatitude: ride.destinationLatitude,
+          destinationLongitude: ride.destinationLongitude,
+          estimatedDistance: ride.estimatedDistance,
+          estimatedDuration: ride.estimatedDuration,
+          estimatedPrice: ride.estimatedPrice,
+          rideTypeId: ride.rideTypeConfigId,
+          rideTypeName: ride.RideTypeConfig?.name || 'Normal',
+          specialRequirements: ride.specialRequirements,
+          hasPets: ride.hasPets,
+          petDescription: ride.petDescription,
+          createdAt: ride.createdAt,
+          expiresAt: new Date(Date.now() + 60000), // 1 minuto para aceitar
+        };
+
+        // Extrair IDs dos motoristas para notificar
+        const driverUserIds = nearbyDrivers
+          .map((driver) => driver.userId)
+          .filter(Boolean);
+
+        // Enviar via WebSocket através do RideGateway
+        if (this.rideGateway && driverUserIds.length > 0) {
+          this.rideGateway.broadcastRideRequest(rideRequestData, driverUserIds);
+          this.logger.log(
+            `✅ Corrida ${ride.id} enviada via WebSocket para ${driverUserIds.length} motoristas`,
+          );
+        } else {
+          this.logger.warn(
+            `⚠️ RideGateway não disponível ou nenhum motorista conectado`,
+          );
+        }
+
+        // Também enviar notificação push se disponível
+        try {
+          if (this.notificationsService) {
+            await this.notificationsService.notifyMultipleDrivers(
+              driverUserIds,
+              'Nova corrida disponível!',
+              `Corrida de ${rideRequestData.originAddress} para ${rideRequestData.destinationAddress}`,
+              {
+                type: 'NEW_RIDE_REQUEST',
+                rideId: ride.id,
+                data: rideRequestData,
+              },
+            );
+          }
+        } catch (notifError) {
+          this.logger.warn(
+            'Erro ao enviar notificação push:',
+            notifError?.message || 'Erro desconhecido',
+          );
+        }
+      } else {
+        this.logger.warn(
+          `⚠️ Nenhum motorista disponível para corrida ${ride.id}`,
+        );
+      }
     } catch (error) {
       this.logger.error('Erro ao notificar motoristas:', error);
     }
@@ -1025,29 +1131,39 @@ export class RidesService {
         );
       }
 
-      // Buscar solicitações de corrida pendentes
-      const pendingRequests = await this.prisma.rideRequest.findMany({
+      // Buscar corridas reais pendentes (status REQUESTED) da tabela Ride
+      const pendingRides = await this.prisma.ride.findMany({
         where: {
-          status: 'PENDING',
-          expiresAt: {
-            gt: new Date(),
-          },
+          status: RideStatus.REQUESTED, // Corridas que ainda não foram aceitas
+          driverId: null, // Ainda não foram atribuídas a um motorista
         },
         include: {
           passenger: {
-            include: { user: true },
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  profileImage: true,
+                  phone: true,
+                },
+              },
+            },
           },
-          rideType: true,
+          RideTypeConfig: true,
         },
-        orderBy: { requestedAt: 'desc' },
+        orderBy: { requestTime: 'desc' },
         take: limit,
       });
 
+      this.logger.log(
+        `Encontradas ${pendingRides.length} corridas pendentes para motorista ${driverId}`,
+      );
+
       return {
         success: true,
-        data: pendingRequests.map((request) =>
-          this.formatRideRequestResponse(request),
-        ),
+        data: pendingRides.map((ride) => this.formatRideResponse(ride)),
       };
     } catch (error) {
       this.logger.error(
@@ -1545,7 +1661,7 @@ export class RidesService {
       return {
         success: true,
         data: {
-          rides: rides.map((ride) => this.formatRideResponse(ride)),
+          rides: rides.map((ride) => this.formatRideResponseDetailed(ride)),
           summary: {
             total: total,
             completed: completedRides.length,
@@ -1621,6 +1737,43 @@ export class RidesService {
       estimatedDuration: request.estimatedDuration,
       requestedAt: request.requestedAt,
       expiresAt: request.expiresAt,
+    };
+  }
+
+  private formatRideResponse(ride: any) {
+    return {
+      id: ride.id,
+      passengerId: ride.passengerId,
+      passengerName: `${ride.passenger.user.firstName} ${ride.passenger.user.lastName}`,
+      passengerRating: ride.passenger.averageRating || 5.0,
+      passengerPhone: ride.passenger.user.phone,
+      passengerProfileImage: ride.passenger.user.profileImage,
+      pickupAddress: ride.originAddress,
+      pickupLocation: {
+        latitude: ride.originLatitude,
+        longitude: ride.originLongitude,
+      },
+      destinationAddress: ride.destinationAddress,
+      destinationLocation: {
+        latitude: ride.destinationLatitude,
+        longitude: ride.destinationLongitude,
+      },
+      rideType: {
+        name: ride.RideTypeConfig?.name || 'Normal',
+        icon: ride.RideTypeConfig?.icon || '🚗',
+      },
+      estimatedPrice: ride.finalPrice || ride.basePrice,
+      estimatedDistance: ride.estimatedDistance,
+      estimatedDuration: ride.estimatedDuration,
+      requestedAt: ride.requestTime,
+      status: ride.status,
+      currency: ride.currency,
+      isFemaleOnlyRide: ride.isFemaleOnlyRide,
+      hasPets: ride.hasPets,
+      petDescription: ride.petDescription,
+      specialRequirements: ride.specialRequirements,
+      baggageQuantity: ride.baggageQuantity,
+      scheduledTime: ride.scheduledTime,
     };
   }
 }

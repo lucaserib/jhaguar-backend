@@ -9,6 +9,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -21,6 +22,7 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     { socketId: string; userId: string; userType: 'driver' | 'passenger' }
   >();
   private readonly logger = new Logger(RideGateway.name);
+  constructor(private readonly jwtService: JwtService) {}
 
   handleConnection(client: Socket) {
     const userId = this.extractUserId(client);
@@ -213,9 +215,9 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  broadcastRideRequest(rideRequest: any, targetDriverIds: string[]) {
+  broadcastRideRequest(ride: any, targetDriverIds: string[]) {
     this.logger.log(
-      `Broadcasting ride request ${rideRequest.id} to ${targetDriverIds.length} drivers`,
+      `Broadcasting ride ${ride.id} to ${targetDriverIds.length} drivers`,
     );
 
     const connectedDriverSockets = Array.from(this.connectedUsers.entries())
@@ -227,7 +229,7 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .map(([socketId]) => socketId);
 
     connectedDriverSockets.forEach((socketId) => {
-      this.server.to(socketId).emit('ride:new-request', rideRequest);
+      this.server.to(socketId).emit('ride:new-request', ride);
     });
   }
 
@@ -281,26 +283,33 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private extractUserId(client: Socket): string | null {
-    const token =
-      client.handshake.auth?.token || client.handshake.headers?.authorization;
+    const rawToken =
+      (client.handshake.auth?.token as string) ||
+      (client.handshake.headers?.authorization as string);
 
-    if (!token) {
+    if (!rawToken) {
       this.logger.warn(`No token provided for socket ${client.id}`);
       return null;
     }
 
+    const token = rawToken.startsWith('Bearer ') ? rawToken.slice(7) : rawToken;
+
     try {
-      // Aqui você decodificaria o JWT e extrairia o userId
-      // Por enquanto, vamos usar um mock
-      return client.handshake.query.userId as string;
-    } catch (error) {
+      const payload: any = this.jwtService.decode(token);
+      if (!payload?.sub) {
+        this.logger.warn('Invalid token payload (no sub)');
+        return null;
+      }
+      return payload.sub as string;
+    } catch (error: any) {
       this.logger.error(`Error extracting user ID: ${error.message}`);
       return null;
     }
   }
 
   private extractUserType(client: Socket): 'driver' | 'passenger' | null {
-    const userType = client.handshake.query.userType as string;
+    const userType = (client.handshake.auth?.userType ||
+      client.handshake.query.userType) as string;
     if (userType === 'driver' || userType === 'passenger') {
       return userType;
     }

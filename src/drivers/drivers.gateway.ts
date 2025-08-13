@@ -11,6 +11,7 @@ import { Server, Socket } from 'socket.io';
 import { LocationUpdateDto } from './dto/location-update.dto';
 import { DriversService } from './drivers.service';
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -21,12 +22,15 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private connectedDrivers = new Map<string, string>(); // socketId -> driverId
   private readonly logger = new Logger(DriverGateway.name);
 
-  constructor(private driversService: DriversService) {}
+  constructor(
+    private driversService: DriversService,
+    private jwtService: JwtService,
+  ) {}
 
   handleConnection(client: Socket) {
     const driverId = this.extractDriverId(client);
     this.logger.log(`Driver connected: ${client.id}, driverId: ${driverId}`);
-    
+
     if (driverId) {
       this.connectedDrivers.set(client.id, driverId);
       client.join(`driver:${driverId}`);
@@ -37,7 +41,7 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(client: Socket) {
     const driverId = this.connectedDrivers.get(client.id);
     this.logger.log(`Driver disconnected: ${client.id}, driverId: ${driverId}`);
-    
+
     if (driverId) {
       this.connectedDrivers.delete(client.id);
       client.leave(`driver:${driverId}`);
@@ -53,7 +57,7 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`Driver going online: ${data.driverId}`);
     client.join(`driver:${data.driverId}`);
     this.connectedDrivers.set(client.id, data.driverId);
-    
+
     // Broadcast que motorista ficou online para sistema de matchmaking
     this.server.emit('driver:status-changed', {
       driverId: data.driverId,
@@ -69,7 +73,7 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.logger.log(`Driver going offline: ${data.driverId}`);
     client.leave(`driver:${data.driverId}`);
-    
+
     // Broadcast que motorista ficou offline
     this.server.emit('driver:status-changed', {
       driverId: data.driverId,
@@ -86,7 +90,7 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
     try {
       // Processar atualização de localização através do service
       await this.driversService.updateLocationWithCache(data.driverId, data);
-      
+
       // Broadcast localização para outros serviços que possam precisar
       this.server.emit('driver:location-changed', {
         driverId: data.driverId,
@@ -118,7 +122,9 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   emitRideRequestCancelled(driverId: string, rideId: string) {
     this.logger.log(`Emitting ride request cancelled to driver ${driverId}`);
-    this.server.to(`driver:${driverId}`).emit('ride:request-cancelled', { rideId });
+    this.server
+      .to(`driver:${driverId}`)
+      .emit('ride:request-cancelled', { rideId });
   }
 
   emitRideStatusUpdate(driverId: string, rideData: any) {
@@ -146,7 +152,7 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const connectedSocketIds = Array.from(this.connectedDrivers.entries())
       .filter(([_, id]) => id === driverId)
       .map(([socketId]) => socketId);
-    
+
     return connectedSocketIds.length > 0;
   }
 
@@ -156,20 +162,27 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private extractDriverId(client: Socket): string | null {
-    // Extrai o driverId do token JWT ou dos headers
-    const token = client.handshake.auth?.token || client.handshake.headers?.authorization;
-    
-    if (!token) {
-      this.logger.warn(`No token provided for socket ${client.id}`);
-      return null;
-    }
-
     try {
-      // Aqui você decodificaria o JWT e extrairia o driverId
-      // Por enquanto, vamos usar um mock
-      return client.handshake.query.driverId as string;
+      // Extrair token do header de autorização ou query params
+      const token =
+        client.handshake.auth?.token ||
+        client.handshake.query?.token ||
+        client.handshake.headers?.authorization?.replace('Bearer ', '');
+
+      if (!token) {
+        this.logger.warn('No token provided in WebSocket connection');
+        return null;
+      }
+
+      // Decodificar JWT
+      const payload = this.jwtService.verify(token);
+
+      // Retornar o userId (que será usado para buscar o driverId)
+      return payload.sub || payload.userId;
     } catch (error) {
-      this.logger.error(`Error extracting driver ID: ${error.message}`);
+      this.logger.error(
+        `Error extracting driver ID from JWT: ${error.message}`,
+      );
       return null;
     }
   }

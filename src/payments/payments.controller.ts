@@ -25,6 +25,7 @@ import {
   ApiHeader,
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
+import { Throttle } from '@nestjs/throttler';
 import { Response } from 'express';
 import { randomUUID } from 'crypto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -63,6 +64,7 @@ export class PaymentsController {
     description: 'Saldo consultado com sucesso',
     type: WalletBalanceResponse,
   })
+  @Throttle({ default: { limit: 20, ttl: 1000 } })
   async getWalletBalance(@User() user: any) {
     try {
       const balance = await this.paymentsService.getWalletBalance(user.id);
@@ -129,6 +131,7 @@ export class PaymentsController {
     description: 'Histórico retornado com sucesso',
     type: [TransactionResponse],
   })
+  @Throttle({ default: { limit: 10, ttl: 1000 } })
   async getTransactionHistory(
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
@@ -484,6 +487,7 @@ export class PaymentsController {
     description: 'Métodos de pagamento retornados',
     type: [PaymentMethodOption],
   })
+  @Throttle({ default: { limit: 20, ttl: 1000 } })
   async getPaymentMethods(@User() user: any) {
     try {
       const methods = await this.paymentsService.getPaymentMethods(user.id);

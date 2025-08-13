@@ -3,7 +3,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { RideTypesService } from '../ride-types/ride-types.service';
 import { NearbyDriversDto, NearbyDriver } from './dto/nearby-drivers.dto';
-import { CalculateRouteNewDto, RouteResponseDto } from './dto/calculate-route-new.dto';
+import {
+  CalculateRouteNewDto,
+  RouteResponseDto,
+} from './dto/calculate-route-new.dto';
+import { CalculatePriceDto } from './dto/calculate-price.dto';
 import {
   Location,
   DriverWithDistance,
@@ -53,9 +57,13 @@ export class MapsService {
 
   // ==================== NOVAS FUNCIONALIDADES OBRIGATÓRIAS ====================
 
-  async findNearbyDriversGeospatial(data: NearbyDriversDto): Promise<NearbyDriver[]> {
+  async findNearbyDriversGeospatial(
+    data: NearbyDriversDto,
+  ): Promise<NearbyDriver[]> {
     try {
-      this.logger.log(`Finding nearby drivers within ${data.radius}km of ${data.latitude}, ${data.longitude}`);
+      this.logger.log(
+        `Finding nearby drivers within ${data.radius}km of ${data.latitude}, ${data.longitude}`,
+      );
 
       // Usando consulta geoespacial com Prisma (PostGIS simulation)
       // Na implementação real, usaria ST_DWithin ou similar
@@ -106,24 +114,28 @@ export class MapsService {
         LIMIT $4;
       `;
 
-      const drivers = await this.prisma.$queryRawUnsafe(
+      const drivers = (await this.prisma.$queryRawUnsafe(
         rawQuery,
         data.latitude,
         data.longitude,
         data.radius,
-        data.limit
-      ) as any[];
+        data.limit,
+      )) as any[];
 
-      return drivers.map(driver => this.formatNearbyDriverResponse(driver));
+      return drivers.map((driver) => this.formatNearbyDriverResponse(driver));
     } catch (error) {
       this.logger.error(`Error finding nearby drivers: ${error.message}`);
       throw new BadRequestException('Erro ao buscar motoristas próximos');
     }
   }
 
-  async calculateRouteNew(data: CalculateRouteNewDto): Promise<RouteResponseDto> {
+  async calculateRouteNew(
+    data: CalculateRouteNewDto,
+  ): Promise<RouteResponseDto> {
     try {
-      this.logger.log(`Calculating route from ${JSON.stringify(data.origin)} to ${JSON.stringify(data.destination)}`);
+      this.logger.log(
+        `Calculating route from ${JSON.stringify(data.origin)} to ${JSON.stringify(data.destination)}`,
+      );
 
       // Implementação com Google Routes API ou similar
       const route = await this.calculateOptimizedRoute(data);
@@ -144,12 +156,12 @@ export class MapsService {
   async findDriversInRegionWithCache(
     centerLat: number,
     centerLng: number,
-    radiusKm: number
+    radiusKm: number,
   ): Promise<string[]> {
     try {
       // Primeiro, tentar buscar do cache Redis (se disponível)
       const cacheKey = `online_drivers:${centerLat}:${centerLng}:${radiusKm}`;
-      
+
       // Simulação de busca otimizada com índice geoespacial
       const rawQuery = `
         SELECT d.id
@@ -180,14 +192,14 @@ export class MapsService {
         ) ASC;
       `;
 
-      const result = await this.prisma.$queryRawUnsafe(
+      const result = (await this.prisma.$queryRawUnsafe(
         rawQuery,
         centerLat,
         centerLng,
-        radiusKm
-      ) as { id: string }[];
+        radiusKm,
+      )) as { id: string }[];
 
-      return result.map(r => r.id);
+      return result.map((r) => r.id);
     } catch (error) {
       this.logger.error(`Error finding drivers in region: ${error.message}`);
       return [];
@@ -215,13 +227,15 @@ export class MapsService {
           },
         });
 
-        return driver ? {
-          latitude: Number(driver.currentLatitude),
-          longitude: Number(driver.currentLongitude),
-          isOnline: driver.isOnline,
-          isAvailable: driver.isAvailable,
-          updatedAt: driver.lastLocationUpdate,
-        } : null;
+        return driver
+          ? {
+              latitude: Number(driver.currentLatitude),
+              longitude: Number(driver.currentLongitude),
+              isOnline: driver.isOnline,
+              isAvailable: driver.isAvailable,
+              updatedAt: driver.lastLocationUpdate,
+            }
+          : null;
       }
 
       return {
@@ -266,16 +280,18 @@ export class MapsService {
     };
   }
 
-  private async calculateOptimizedRoute(data: CalculateRouteNewDto): Promise<RouteResponseDto> {
+  private async calculateOptimizedRoute(
+    data: CalculateRouteNewDto,
+  ): Promise<RouteResponseDto> {
     // Implementação simplificada - na produção usaria Google Routes API
     const distance = this.calculateHaversineDistance(
       data.origin.lat,
       data.origin.lng,
       data.destination.lat,
-      data.destination.lng
+      data.destination.lng,
     );
 
-    const duration = Math.round(distance / 250 * 60); // ~15 km/h na cidade
+    const duration = Math.round((distance / 250) * 60); // ~15 km/h na cidade
 
     return {
       distance: Math.round(distance * 1000), // converter para metros
@@ -303,14 +319,21 @@ export class MapsService {
     };
   }
 
-  private calculateHaversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  private calculateHaversineDistance(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
     const R = 6371; // Raio da Terra em km
     const dLat = this.degToRad(lat2 - lat1);
     const dLng = this.degToRad(lng2 - lng1);
-    const a = 
+    const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.degToRad(lat1)) * Math.cos(this.degToRad(lat2)) *
-      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      Math.cos(this.degToRad(lat1)) *
+        Math.cos(this.degToRad(lat2)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c; // Distância em km
   }
@@ -1206,6 +1229,16 @@ export class MapsService {
       surgeMultiplier = 1,
     } = request;
 
+    // Validar inputs
+    if (!distance || distance <= 0 || isNaN(distance)) {
+      this.logger.warn(`Distância inválida: ${distance}`);
+      throw new Error('Falha no cálculo de preço');
+    }
+    if (!duration || duration <= 0 || isNaN(duration)) {
+      this.logger.warn(`Duração inválida: ${duration}`);
+      throw new Error('Falha no cálculo de preço');
+    }
+
     const baseRates: BaseRates = {
       ECONOMY: { base: 8.0, perKm: 2.5, perMinute: 0.5 },
       COMFORT: { base: 12.0, perKm: 3.0, perMinute: 0.6 },
@@ -1216,18 +1249,113 @@ export class MapsService {
 
     const rates = baseRates[vehicleType] || baseRates.ECONOMY;
 
-    const distanceKm = distance / 1000;
-    const durationMinutes = duration / 60;
+    const distanceKm = Math.max(distance / 1000, 0.1); // Mínimo 100m
+    const durationMinutes = Math.max(duration / 60, 1); // Mínimo 1 minuto
 
     let price =
       rates.base + distanceKm * rates.perKm + durationMinutes * rates.perMinute;
 
-    price *= surgeMultiplier;
+    price *= Math.max(surgeMultiplier, 1); // Garantir multiplicador mínimo de 1
 
     const minimumPrice = rates.base * 1.5;
     price = Math.max(price, minimumPrice);
 
-    return Math.round(price * 100) / 100;
+    const finalPrice = Math.round(price * 100) / 100;
+
+    // Garantir que o preço final é válido
+    if (!finalPrice || finalPrice <= 0 || isNaN(finalPrice)) {
+      this.logger.error(`Preço final inválido: ${finalPrice}, usando fallback`);
+      return 15; // Fallback seguro
+    }
+
+    return finalPrice;
+  }
+
+  async calculatePrice(calculatePriceDto: CalculatePriceDto): Promise<any> {
+    const {
+      distance,
+      duration,
+      vehicleType = 'ECONOMY',
+      surgeMultiplier = 1,
+    } = calculatePriceDto;
+
+    // Validar inputs
+    if (!distance || distance <= 0) {
+      throw new Error('Distância deve ser maior que zero');
+    }
+    if (!duration || duration <= 0) {
+      throw new Error('Duração deve ser maior que zero');
+    }
+
+    const price = this.calculateBasePrice({
+      distance,
+      duration,
+      vehicleType,
+      surgeMultiplier,
+    });
+
+    // Garantir que o preço é válido
+    if (!price || price <= 0 || isNaN(price)) {
+      this.logger.warn(
+        `Preço inválido calculado: ${price} para distância: ${distance}, duração: ${duration}`,
+      );
+      throw new Error('Não foi possível calcular o preço da corrida');
+    }
+
+    return {
+      estimatedPrice: Number(price.toFixed(2)),
+      currency: 'BRL',
+      breakdown: {
+        baseFare: Number(this.getBaseFare(vehicleType).toFixed(2)),
+        distanceFare: Number(
+          this.getDistanceFare(distance, vehicleType).toFixed(2),
+        ),
+        timeFare: Number(this.getTimeFare(duration, vehicleType).toFixed(2)),
+        surgeFare:
+          surgeMultiplier > 1
+            ? Number(
+                ((price / surgeMultiplier) * (surgeMultiplier - 1)).toFixed(2),
+              )
+            : 0,
+      },
+      surgeMultiplier: Number(surgeMultiplier),
+      vehicleType,
+    };
+  }
+
+  private getBaseFare(vehicleType: string): number {
+    const baseRates = {
+      ECONOMY: 8.0,
+      COMFORT: 12.0,
+      LUXURY: 18.0,
+      SUV: 15.0,
+      VAN: 20.0,
+    };
+    return baseRates[vehicleType] || baseRates.ECONOMY;
+  }
+
+  private getDistanceFare(distance: number, vehicleType: string): number {
+    const perKmRates = {
+      ECONOMY: 2.5,
+      COMFORT: 3.0,
+      LUXURY: 4.0,
+      SUV: 3.5,
+      VAN: 4.5,
+    };
+    const rate = perKmRates[vehicleType] || perKmRates.ECONOMY;
+    return (distance / 1000) * rate;
+  }
+
+  private getTimeFare(duration: number, vehicleType: string): number {
+    const perMinuteRates = {
+      ECONOMY: 0.5,
+      COMFORT: 0.6,
+      LUXURY: 0.8,
+      SUV: 0.7,
+      VAN: 0.9,
+    };
+    const rate = perMinuteRates[vehicleType] || perMinuteRates.ECONOMY;
+    return (duration / 60) * rate;
   }
 
   async reverseGeocode(latitude: number, longitude: number): Promise<string> {

@@ -17,6 +17,7 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { MapsService } from './maps.service';
+import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { User } from '../auth/decorator/user.decorator';
 import {
@@ -149,6 +150,7 @@ export class MapsController {
   }
 
   @Post('nearby-drivers')
+  @Throttle({ default: { limit: 100, ttl: 1000 } })
   @ApiOperation({
     summary: 'Buscar motoristas próximos',
     description:
@@ -236,8 +238,7 @@ export class MapsController {
   }
 
   @Post('calculate-route')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @Throttle({ default: { limit: 100, ttl: 1000 } })
   @ApiOperation({
     summary: 'Calcular rota entre dois pontos',
     description:
@@ -262,6 +263,36 @@ export class MapsController {
       throw new (require('@nestjs/common').BadGatewayException)(
         'Falha ao calcular rota com provedor externo',
       );
+    }
+  }
+
+  @Post('calculate-price')
+  @Throttle({ default: { limit: 100, ttl: 1000 } })
+  @ApiOperation({
+    summary: 'Calcular preço para uma corrida',
+    description: 'Calcula o preço estimado para uma corrida específica',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Preço calculado com sucesso',
+    type: PriceResponse,
+  })
+  async calculatePrice(@Body() calculatePriceDto: CalculatePriceDto) {
+    try {
+      const price = await this.mapsService.calculatePrice(calculatePriceDto);
+
+      return {
+        success: true,
+        data: price,
+        message: 'Preço calculado com sucesso',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao calcular preço',
+      };
     }
   }
 

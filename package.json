@@ -21,7 +21,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts",
+    "seed:production": "tsx prisma/seed-production.ts",
+    "seed:clean": "ts-node prisma/seed-production.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

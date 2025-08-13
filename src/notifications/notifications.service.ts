@@ -6,9 +6,7 @@ import { NotificationsGateway } from './notifications.gateway';
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(
-    private readonly notificationsGateway: NotificationsGateway,
-  ) {}
+  constructor(private readonly notificationsGateway: NotificationsGateway) {}
 
   async sendDriverApplicationNotification(driverData: any) {
     this.logger.log(
@@ -52,35 +50,56 @@ export class NotificationsService {
 
   async notifyPassenger(driverId: string, notifyData: NotifyPassengerDto) {
     try {
-      this.logger.log(`Driver ${driverId} notifying passenger for ride ${notifyData.rideId}: ${notifyData.type}`);
+      this.logger.log(
+        `Driver ${driverId} notifying passenger for ride ${notifyData.rideId}: ${notifyData.type}`,
+      );
 
       // Aqui você buscaria os dados da corrida para obter o passengerId
       // Por simplicidade, vou simular
 
-      const message = notifyData.message || this.getDefaultMessage(notifyData.type);
+      const message =
+        notifyData.message || this.getDefaultMessage(notifyData.type);
 
       // Enviar notificação via WebSocket
       switch (notifyData.type) {
         case 'DRIVER_ARRIVED':
-          this.notificationsGateway.notifyDriverArrived('passenger-id', notifyData.rideId);
+          this.notificationsGateway.notifyDriverArrived(
+            'passenger-id',
+            notifyData.rideId,
+          );
           break;
         case 'RIDE_STARTED':
-          this.notificationsGateway.notifyRideStarted('passenger-id', notifyData.rideId);
+          this.notificationsGateway.notifyRideStarted(
+            'passenger-id',
+            notifyData.rideId,
+          );
           break;
         case 'RIDE_COMPLETED':
-          this.notificationsGateway.notifyRideCompleted('passenger-id', notifyData.rideId, {});
+          this.notificationsGateway.notifyRideCompleted(
+            'passenger-id',
+            notifyData.rideId,
+            {},
+          );
           break;
         case 'DRIVER_DELAYED':
-          this.notificationsGateway.sendToUser('passenger-id', 'ride:driver-delayed', {
-            rideId: notifyData.rideId,
-            message,
-          });
+          this.notificationsGateway.sendToUser(
+            'passenger-id',
+            'ride:driver-delayed',
+            {
+              rideId: notifyData.rideId,
+              message,
+            },
+          );
           break;
         case 'CUSTOM':
-          this.notificationsGateway.sendToUser('passenger-id', 'ride:custom-message', {
-            rideId: notifyData.rideId,
-            message,
-          });
+          this.notificationsGateway.sendToUser(
+            'passenger-id',
+            'ride:custom-message',
+            {
+              rideId: notifyData.rideId,
+              message,
+            },
+          );
           break;
       }
 
@@ -101,18 +120,28 @@ export class NotificationsService {
   }
 
   // Métodos de notificação em tempo real
-  async notifyRideAccepted(rideId: string, passengerId: string, driverInfo: any) {
-    this.logger.log(`Notifying ride accepted: ${rideId} to passenger ${passengerId}`);
+  async notifyRideAccepted(
+    rideId: string,
+    passengerId: string,
+    driverInfo: any,
+  ) {
+    this.logger.log(
+      `Notifying ride accepted: ${rideId} to passenger ${passengerId}`,
+    );
     this.notificationsGateway.notifyRideAccepted(passengerId, {
       rideId,
       driver: driverInfo,
     });
   }
 
-  async notifyRideStatusChanged(rideId: string, status: string, participantIds: string[]) {
+  async notifyRideStatusChanged(
+    rideId: string,
+    status: string,
+    participantIds: string[],
+  ) {
     this.logger.log(`Notifying ride status changed: ${rideId} -> ${status}`);
-    
-    participantIds.forEach(userId => {
+
+    participantIds.forEach((userId) => {
       this.notificationsGateway.sendToUser(userId, 'ride:status-changed', {
         rideId,
         status,
@@ -120,39 +149,111 @@ export class NotificationsService {
     });
   }
 
-  async broadcastSystemMaintenance(message: string, estimatedDuration?: number) {
+  async broadcastSystemMaintenance(
+    message: string,
+    estimatedDuration?: number,
+  ) {
     this.logger.log(`Broadcasting system maintenance: ${message}`);
-    this.notificationsGateway.broadcastSystemMaintenance(message, estimatedDuration);
+    this.notificationsGateway.broadcastSystemMaintenance(
+      message,
+      estimatedDuration,
+    );
   }
 
   async notifyEarningsUpdate(driverId: string, earningsData: any) {
     this.logger.log(`Notifying earnings update to driver ${driverId}`);
-    this.notificationsGateway.sendToUser(driverId, 'earnings:updated', earningsData);
+    this.notificationsGateway.sendToUser(
+      driverId,
+      'earnings:updated',
+      earningsData,
+    );
+  }
+
+  // Notificar múltiplos motoristas sobre nova corrida
+  async notifyMultipleDrivers(
+    driverUserIds: string[],
+    title: string,
+    message: string,
+    data?: any,
+  ) {
+    try {
+      this.logger.log(
+        `Enviando notificação para ${driverUserIds.length} motoristas: ${title}`,
+      );
+
+      // Enviar notificação push para cada motorista
+      const pushPromises = driverUserIds.map(async (driverId) => {
+        try {
+          return await this.sendPushNotification(
+            driverId,
+            data?.type || 'NEW_RIDE_REQUEST',
+            message,
+          );
+        } catch (error) {
+          this.logger.warn(
+            `Erro ao enviar push para motorista ${driverId}:`,
+            error.message,
+          );
+          return { success: false, driverId, error: error.message };
+        }
+      });
+
+      const results = await Promise.allSettled(pushPromises);
+
+      const successful = results.filter(
+        (result) => result.status === 'fulfilled',
+      ).length;
+      const failed = results.filter(
+        (result) => result.status === 'rejected',
+      ).length;
+
+      this.logger.log(
+        `Push notifications enviadas: ${successful} sucessos, ${failed} falhas`,
+      );
+
+      return {
+        success: true,
+        sent: successful,
+        failed: failed,
+        total: driverUserIds.length,
+      };
+    } catch (error) {
+      this.logger.error(`Erro ao notificar múltiplos motoristas:`, error);
+      return {
+        success: false,
+        message: 'Erro ao enviar notificações',
+        error: error.message,
+      };
+    }
   }
 
   // Métodos auxiliares
   private getDefaultMessage(type: string): string {
     const messages = {
-      'DRIVER_ARRIVED': 'Seu motorista chegou ao local de embarque',
-      'RIDE_STARTED': 'Sua corrida foi iniciada',
-      'RIDE_COMPLETED': 'Sua corrida foi finalizada',
-      'DRIVER_DELAYED': 'Seu motorista está com um pequeno atraso',
-      'CUSTOM': 'Mensagem do motorista',
+      DRIVER_ARRIVED: 'Seu motorista chegou ao local de embarque',
+      RIDE_STARTED: 'Sua corrida foi iniciada',
+      RIDE_COMPLETED: 'Sua corrida foi finalizada',
+      DRIVER_DELAYED: 'Seu motorista está com um pequeno atraso',
+      CUSTOM: 'Mensagem do motorista',
     };
 
     return messages[type] || 'Atualização da sua corrida';
   }
 
-  private async sendPushNotification(userId: string, type: string, message: string) {
+  private async sendPushNotification(
+    userId: string,
+    type: string,
+    message: string,
+  ) {
     // Implementação de push notification (Firebase, Apple Push, etc.)
     this.logger.log(`[PUSH] Sending to ${userId}: ${type} - ${message}`);
-    
+
     // Aqui você integraria com serviços como:
     // - Firebase Cloud Messaging
     // - Apple Push Notification Service
     // - OneSignal
     // etc.
-    
+
     return true;
   }
 
@@ -162,7 +263,11 @@ export class NotificationsService {
     return true;
   }
 
-  private async sendEmailNotification(email: string, subject: string, message: string) {
+  private async sendEmailNotification(
+    email: string,
+    subject: string,
+    message: string,
+  ) {
     // Implementação de email (SendGrid, AWS SES, etc.)
     this.logger.log(`[EMAIL] Sending to ${email}: ${subject} - ${message}`);
     return true;

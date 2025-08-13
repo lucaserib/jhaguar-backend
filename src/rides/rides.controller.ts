@@ -42,6 +42,24 @@ import { randomUUID } from 'crypto';
 export class RidesController {
   constructor(private readonly ridesService: RidesService) {}
 
+  private generateDeterministicKey(userId: string, createRideDto: CreateRideDto): string {
+    // Gerar chave baseada em dados únicos da corrida para evitar duplicações
+    const keyData = {
+      userId,
+      originLat: createRideDto.originLatitude,
+      originLng: createRideDto.originLongitude,
+      destLat: createRideDto.destinationLatitude,
+      destLng: createRideDto.destinationLongitude,
+      rideTypeId: createRideDto.rideTypeId,
+      timestamp: Math.floor(Date.now() / 30000), // Janela de 30 segundos
+    };
+    
+    // Criar hash simples baseado nos dados
+    const keyString = JSON.stringify(keyData);
+    const hash = Buffer.from(keyString).toString('base64').replace(/[^a-zA-Z0-9]/g, '').substring(0, 16);
+    return `auto-${hash}`;
+  }
+
   @Post('prepare-confirmation')
   @ApiOperation({
     summary: 'Preparar confirmação de corrida',
@@ -97,8 +115,8 @@ export class RidesController {
     @Headers('Idempotency-Key') idemKey?: string,
     @Res({ passthrough: true }) res?: Response,
   ) {
-    // Gerar Idempotency-Key se ausente
-    const key = idemKey || randomUUID();
+    // Gerar Idempotency-Key determinístico baseado no conteúdo se ausente
+    const key = idemKey || this.generateDeterministicKey(user.id, createRideDto);
 
     // Normalização do payload flat -> nested
     if (
