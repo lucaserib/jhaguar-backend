@@ -188,7 +188,49 @@ export class RidesService {
           isPremiumTime: this.isPremiumTime(),
         });
 
-        // Verificar se o passageiro já tem uma corrida pendente
+        // Primeiro, limpar rides órfãs (mais de 10 minutos pendentes)
+        const cutoffTime = new Date(Date.now() - 10 * 60 * 1000); // 10 minutos atrás
+        const orphanedRides = await this.prisma.ride.findMany({
+          where: {
+            passengerId: passenger.id,
+            status: {
+              in: [RideStatus.REQUESTED, RideStatus.ACCEPTED, RideStatus.IN_PROGRESS],
+            },
+            createdAt: {
+              lt: cutoffTime,
+            },
+          },
+        });
+
+        if (orphanedRides.length > 0) {
+          this.logger.warn(
+            `🧹 Limpando ${orphanedRides.length} rides órfãs do passageiro ${passenger.id}`,
+          );
+          
+          // Limpar rides órfãs em transação
+          await this.prisma.$transaction(async (tx) => {
+            const rideIds = orphanedRides.map(r => r.id);
+            
+            // Limpar pagamentos relacionados
+            await tx.payment.deleteMany({
+              where: { rideId: { in: rideIds } }
+            });
+            
+            // Limpar histórico de status
+            await tx.rideStatusHistory.deleteMany({
+              where: { rideId: { in: rideIds } }
+            });
+            
+            // Remover as rides órfãs
+            await tx.ride.deleteMany({
+              where: { id: { in: rideIds } }
+            });
+          });
+          
+          this.logger.log(`✅ ${orphanedRides.length} rides órfãs removidas`);
+        }
+
+        // Agora verificar se o passageiro tem corrida pendente válida (recente)
         const existingRide = await this.prisma.ride.findFirst({
           where: {
             passengerId: passenger.id,
@@ -199,14 +241,32 @@ export class RidesService {
                 RideStatus.IN_PROGRESS,
               ],
             },
+            createdAt: {
+              gte: cutoffTime, // Apenas rides criadas nos últimos 10 minutos
+            },
           },
+          orderBy: { createdAt: 'desc' },
         });
 
         if (existingRide) {
+          const ageMinutes = Math.floor((Date.now() - existingRide.createdAt.getTime()) / (1000 * 60));
           this.logger.warn(
-            `Passageiro ${passenger.id} já tem corrida ativa: ${existingRide.id}`,
+            `Passageiro ${passenger.id} já tem corrida ativa: ${existingRide.id} (status: ${existingRide.status}, idade: ${ageMinutes}min)`,
           );
-          throw new BadRequestException('Você já tem uma corrida em andamento');
+          
+          // Incluir informações da ride existente na resposta
+          throw new BadRequestException({
+            message: 'Você já tem uma corrida em andamento',
+            details: {
+              rideId: existingRide.id,
+              status: existingRide.status,
+              createdAt: existingRide.createdAt,
+              origin: existingRide.originAddress,
+              destination: existingRide.destinationAddress,
+              ageMinutes,
+            },
+            code: 'RIDE_ALREADY_EXISTS'
+          });
         }
 
         // Garantir preço estimado positivo (fallback se enviado)
@@ -1022,7 +1082,7 @@ export class RidesService {
           destinationLongitude: ride.destinationLongitude,
           estimatedDistance: ride.estimatedDistance,
           estimatedDuration: ride.estimatedDuration,
-          estimatedPrice: ride.estimatedPrice,
+          estimatedPrice: ride.finalPrice,
           rideTypeId: ride.rideTypeConfigId,
           rideTypeName: ride.RideTypeConfig?.name || 'Normal',
           specialRequirements: ride.specialRequirements,
@@ -1036,6 +1096,13 @@ export class RidesService {
         const driverUserIds = nearbyDrivers
           .map((driver) => driver.userId)
           .filter(Boolean);
+
+        this.logger.log(
+          `🚗 Motoristas próximos encontrados: ${nearbyDrivers.length}`,
+        );
+        this.logger.log(
+          `👥 UserIDs para notificar: ${JSON.stringify(driverUserIds)}`,
+        );
 
         // Enviar via WebSocket através do RideGateway
         if (this.rideGateway && driverUserIds.length > 0) {
@@ -1775,5 +1842,486 @@ export class RidesService {
       baggageQuantity: ride.baggageQuantity,
       scheduledTime: ride.scheduledTime,
     };
+  }
+
+  // ==================== BUSCA DE OPÇÕES DE CORRIDA ====================
+
+  async searchAvailableRideOptions(
+    userId: string,
+    searchDto: {
+      origin: { latitude: number; longitude: number; address: string };
+      destination: { latitude: number; longitude: number; address: string };
+      userGender?: 'M' | 'F';
+      passengerId: string;
+      preferences?: {
+        maxPrice?: number;
+        maxWaitTime?: number;
+        rideTypeIds?: string[];
+        hasPets?: boolean;
+      };
+    },
+  ) {
+    try {
+      this.logger.log(`🔍 Buscando opções de corrida para usuário ${userId}`);
+      
+      // Validar dados de entrada
+      if (!searchDto.origin || !searchDto.destination) {
+        throw new BadRequestException('Origem e destino são obrigatórios');
+      }
+
+      if (!searchDto.origin.latitude || !searchDto.origin.longitude ||
+          !searchDto.destination.latitude || !searchDto.destination.longitude) {
+        throw new BadRequestException('Coordenadas de origem e destino são obrigatórias');
+      }
+
+      // Buscar todos os tipos de corrida disponíveis
+      const allRideTypes = await this.rideTypesService.findAllRideTypes();
+      
+      if (!allRideTypes || allRideTypes.length === 0) {
+        this.logger.warn('Nenhum tipo de corrida encontrado no sistema');
+        return {
+          success: false,
+          data: [],
+          metadata: {
+            totalOptions: 0,
+            searchRadius: 5000, // 5km padrão
+            timestamp: new Date().toISOString(),
+            message: 'Nenhum tipo de corrida disponível no momento'
+          }
+        };
+      }
+
+      // Filtrar por tipos específicos se fornecidos
+      let rideTypes = allRideTypes;
+      if (searchDto.preferences?.rideTypeIds && searchDto.preferences.rideTypeIds.length > 0) {
+        rideTypes = allRideTypes.filter(rt => 
+          searchDto.preferences!.rideTypeIds!.includes(rt.id)
+        );
+      }
+
+      // Filtrar corridas somente femininas se usuário for masculino
+      if (searchDto.userGender === 'M') {
+        rideTypes = rideTypes.filter(rt => !rt.isFemaleOnly);
+      }
+
+      // Buscar motoristas online em um raio de 5km
+      const searchRadius = 5000; // 5km em metros
+      const availableDrivers = await this.findAvailableDriversInRadius(
+        searchDto.origin.latitude,
+        searchDto.origin.longitude,
+        searchRadius
+      );
+
+      if (availableDrivers.length === 0) {
+        this.logger.warn('Nenhum motorista disponível encontrado na região');
+        return {
+          success: false,
+          data: [],
+          metadata: {
+            totalOptions: 0,
+            searchRadius,
+            timestamp: new Date().toISOString(),
+            message: 'Nenhum motorista disponível na região no momento'
+          }
+        };
+      }
+
+      // Calcular distância e duração estimada da viagem
+      let routeInfo;
+      try {
+        routeInfo = await this.mapsService.calculateRoute({
+          origin: {
+            latitude: searchDto.origin.latitude,
+            longitude: searchDto.origin.longitude
+          },
+          destination: {
+            latitude: searchDto.destination.latitude,
+            longitude: searchDto.destination.longitude
+          }
+        });
+      } catch (error) {
+        this.logger.warn(`Erro ao calcular rota com Maps API: ${error.message}`);
+        routeInfo = null;
+      }
+
+      const estimatedDistance = routeInfo?.distance || this.calculateSimpleDistance(
+        searchDto.origin.latitude,
+        searchDto.origin.longitude,
+        searchDto.destination.latitude,
+        searchDto.destination.longitude
+      );
+
+      const estimatedDuration = routeInfo?.duration || Math.ceil(estimatedDistance / 500 * 60); // Aproximação: 30km/h
+
+      // Criar opções para cada tipo de corrida que tem motoristas compatíveis
+      const availableOptions: any[] = [];
+
+      for (const rideType of rideTypes) {
+        // Filtrar motoristas compatíveis com o tipo de corrida
+        let compatibleDrivers = availableDrivers.filter(driver => {
+          // Verificar se motorista suporta este tipo de corrida
+          if (rideType.vehicleTypeRequired && driver.vehicleType !== rideType.vehicleTypeRequired) {
+            return false;
+          }
+
+          // Verificar corridas femininas
+          if (rideType.isFemaleOnly && driver.user?.gender !== 'F') {
+            return false;
+          }
+
+          // Verificar se aceita pets se necessário
+          if (searchDto.preferences?.hasPets && !driver.acceptsPets) {
+            return false;
+          }
+
+          return true;
+        });
+
+        // Se não há motoristas compatíveis, pular este tipo
+        if (compatibleDrivers.length === 0) {
+          continue;
+        }
+
+        // Calcular preço estimado
+        const basePrice = rideType.baseFare + (estimatedDistance * rideType.pricePerKm);
+        const timePrice = estimatedDuration * (rideType.pricePerMinute || 0.5);
+        const estimatedPrice = Math.max(basePrice + timePrice, rideType.minimumFare);
+
+        // Filtrar por preço máximo se especificado
+        if (searchDto.preferences?.maxPrice && estimatedPrice > searchDto.preferences.maxPrice) {
+          continue;
+        }
+
+        // Ordenar motoristas por proximidade (mais próximo primeiro)
+        compatibleDrivers.sort((a, b) => {
+          const distA = this.calculateSimpleDistance(
+            searchDto.origin.latitude,
+            searchDto.origin.longitude,
+            a.lastKnownLatitude,
+            a.lastKnownLongitude
+          );
+          const distB = this.calculateSimpleDistance(
+            searchDto.origin.latitude,
+            searchDto.origin.longitude,
+            b.lastKnownLatitude,
+            b.lastKnownLongitude
+          );
+          return distA - distB;
+        });
+
+        // Pegar apenas os 3 motoristas mais próximos
+        const nearestDrivers = compatibleDrivers.slice(0, 3);
+
+        // Calcular tempo estimado de chegada do motorista mais próximo
+        const nearestDriver = nearestDrivers[0];
+        const driverDistance = this.calculateSimpleDistance(
+          searchDto.origin.latitude,
+          searchDto.origin.longitude,
+          nearestDriver.lastKnownLatitude,
+          nearestDriver.lastKnownLongitude
+        );
+        const estimatedArrival = Math.ceil(driverDistance / 500 * 60); // Aprox 30km/h
+
+        // Filtrar por tempo máximo de espera se especificado
+        if (searchDto.preferences?.maxWaitTime && estimatedArrival > searchDto.preferences.maxWaitTime) {
+          continue;
+        }
+
+        availableOptions.push({
+          rideType: {
+            id: rideType.id,
+            name: rideType.name,
+            description: rideType.description,
+            icon: rideType.icon || '🚗',
+            features: rideType.features || [],
+            baseFare: rideType.baseFare,
+            pricePerKm: rideType.pricePerKm,
+            pricePerMinute: rideType.pricePerMinute,
+            minimumFare: rideType.minimumFare,
+            maxPassengers: rideType.maxPassengers,
+            isFemaleOnly: rideType.isFemaleOnly,
+            allowsPets: rideType.allowsPets,
+            isLuxury: rideType.isLuxury,
+          },
+          availableDrivers: nearestDrivers.map(driver => ({
+            id: driver.id,
+            userId: driver.userId,
+            name: driver.user.name,
+            rating: driver.rating,
+            totalRides: driver.totalRides,
+            vehicleInfo: {
+              make: driver.vehicleMake,
+              model: driver.vehicleModel,
+              year: driver.vehicleYear,
+              color: driver.vehicleColor,
+              plate: driver.vehiclePlate,
+              type: driver.vehicleType,
+            },
+            location: {
+              latitude: driver.lastKnownLatitude,
+              longitude: driver.lastKnownLongitude,
+              lastUpdated: driver.lastLocationUpdate,
+            },
+            distanceFromOrigin: this.calculateSimpleDistance(
+              searchDto.origin.latitude,
+              searchDto.origin.longitude,
+              driver.lastKnownLatitude,
+              driver.lastKnownLongitude
+            ),
+          })),
+          estimatedPrice: Math.round(estimatedPrice * 100) / 100, // Arredondar para 2 casas decimais
+          estimatedDuration, // em minutos
+          estimatedDistance, // em metros
+          estimatedArrival, // tempo para motorista chegar em minutos
+          priceBreakdown: {
+            baseFare: rideType.baseFare,
+            distancePrice: estimatedDistance * rideType.pricePerKm,
+            timePrice: estimatedDuration * (rideType.pricePerMinute || 0.5),
+            total: estimatedPrice,
+          },
+        });
+      }
+
+      if (availableOptions.length === 0) {
+        this.logger.warn('Nenhuma opção de corrida disponível após filtros');
+        return {
+          success: false,
+          data: [],
+          metadata: {
+            totalOptions: 0,
+            searchRadius,
+            timestamp: new Date().toISOString(),
+            message: 'Nenhum motorista compatível disponível no momento'
+          }
+        };
+      }
+
+      // Ordenar opções por preço (mais barato primeiro)
+      availableOptions.sort((a, b) => a.estimatedPrice - b.estimatedPrice);
+
+      this.logger.log(`✅ ${availableOptions.length} opções de corrida encontradas`);
+      
+      return {
+        success: true,
+        data: availableOptions,
+        metadata: {
+          totalOptions: availableOptions.length,
+          searchRadius,
+          timestamp: new Date().toISOString(),
+          routeInfo: {
+            estimatedDistance,
+            estimatedDuration,
+            origin: searchDto.origin,
+            destination: searchDto.destination,
+          }
+        }
+      };
+
+    } catch (error) {
+      this.logger.error(`Erro ao buscar opções de corrida: ${error.message}`, error.stack);
+      throw new BadRequestException(`Erro ao buscar opções de corrida: ${error.message}`);
+    }
+  }
+
+  // Método auxiliar para buscar motoristas disponíveis em um raio
+  private async findAvailableDriversInRadius(
+    latitude: number,
+    longitude: number,
+    radiusInMeters: number
+  ) {
+    try {
+      // Query raw para buscar motoristas online em um raio específico usando fórmula Haversine
+      const drivers = await this.prisma.$queryRaw`
+        SELECT 
+          d.*,
+          u.name,
+          u.email,
+          u.phone,
+          u.gender,
+          u.profileImage,
+          (
+            6371000 * acos(
+              cos(radians(${latitude})) * 
+              cos(radians(d.lastKnownLatitude)) *
+              cos(radians(d.lastKnownLongitude) - radians(${longitude})) +
+              sin(radians(${latitude})) * 
+              sin(radians(d.lastKnownLatitude))
+            )
+          ) AS distance
+        FROM "Driver" d
+        INNER JOIN "User" u ON d.userId = u.id
+        WHERE 
+          d.isOnline = true
+          AND d.isAvailable = true
+          AND d.lastKnownLatitude IS NOT NULL
+          AND d.lastKnownLongitude IS NOT NULL
+          AND d.lastLocationUpdate > NOW() - INTERVAL '10 minutes'
+          AND (
+            6371000 * acos(
+              cos(radians(${latitude})) * 
+              cos(radians(d.lastKnownLatitude)) *
+              cos(radians(d.lastKnownLongitude) - radians(${longitude})) +
+              sin(radians(${latitude})) * 
+              sin(radians(d.lastKnownLatitude))
+            )
+          ) <= ${radiusInMeters}
+        ORDER BY distance ASC
+      ` as any[];
+
+      return drivers.map(driver => ({
+        ...driver,
+        user: {
+          name: driver.name,
+          email: driver.email,
+          phone: driver.phone,
+          gender: driver.gender,
+          profileImage: driver.profileImage,
+        }
+      }));
+      
+    } catch (error) {
+      this.logger.error(`Erro ao buscar motoristas disponíveis: ${error.message}`);
+      return [];
+    }
+  }
+
+  // Método auxiliar para calcular distância simples entre dois pontos
+  private calculateSimpleDistance(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number {
+    const R = 6371000; // Raio da Terra em metros
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  // ==================== LIMPEZA DE RIDES ÓRFÃS ====================
+
+  async cleanupOrphanedRides(userId?: string) {
+    try {
+      this.logger.log('🧹 Iniciando limpeza de rides órfãs/pendentes...');
+
+      // Buscar rides pendentes há mais de 10 minutos
+      const cutoffTime = new Date(Date.now() - 10 * 60 * 1000); // 10 minutos atrás
+      
+      const orphanedRides = await this.prisma.ride.findMany({
+        where: {
+          status: {
+            in: [RideStatus.REQUESTED, RideStatus.ACCEPTED, RideStatus.IN_PROGRESS],
+          },
+          createdAt: {
+            lt: cutoffTime,
+          },
+        },
+        include: {
+          passenger: {
+            include: { user: true }
+          },
+          driver: {
+            include: { user: true }
+          }
+        }
+      });
+
+      if (orphanedRides.length === 0) {
+        this.logger.log('✅ Nenhuma ride órfã encontrada');
+        return {
+          success: true,
+          data: {
+            clearedRides: 0,
+            oldestRideAge: null,
+          },
+          message: 'Nenhuma ride órfã encontrada',
+        };
+      }
+
+      this.logger.warn(`⚠️ Encontradas ${orphanedRides.length} rides órfãs para limpeza`);
+
+      // Calcular idade da ride mais antiga
+      const oldestRide = orphanedRides.reduce((oldest, current) => {
+        return current.createdAt < oldest.createdAt ? current : oldest;
+      });
+      const oldestAge = Math.floor((Date.now() - oldestRide.createdAt.getTime()) / (1000 * 60));
+
+      // Log detalhado das rides que serão removidas
+      orphanedRides.forEach(ride => {
+        const ageMinutes = Math.floor((Date.now() - ride.createdAt.getTime()) / (1000 * 60));
+        this.logger.warn(
+          `🗑️ Removendo ride órfã: ${ride.id} (status: ${ride.status}, idade: ${ageMinutes}min, passageiro: ${ride.passenger?.user?.firstName || 'N/A'})`
+        );
+      });
+
+      // Executar limpeza em transação
+      const result = await this.prisma.$transaction(async (tx) => {
+        const rideIds = orphanedRides.map(r => r.id);
+
+        // 1. Limpar histórico de status
+        await tx.rideStatusHistory.deleteMany({
+          where: { rideId: { in: rideIds } }
+        });
+
+        // 2. Limpar pagamentos relacionados
+        await tx.payment.deleteMany({
+          where: { rideId: { in: rideIds } }
+        });
+
+        // 3. Limpar requests relacionados (RideRequest não tem rideId, pode estar relacionado por passengerId)
+        // Buscar passengerIds das rides para limpar requests relacionados
+        const passengerIds = orphanedRides.map(r => r.passengerId).filter(Boolean);
+        if (passengerIds.length > 0) {
+          await tx.rideRequest.deleteMany({
+            where: { 
+              passengerId: { in: passengerIds },
+              status: 'PENDING' // Limpar apenas requests pendentes
+            }
+          });
+        }
+
+        // 4. Finalmente, remover as rides
+        const deletedRides = await tx.ride.deleteMany({
+          where: { id: { in: rideIds } }
+        });
+
+        return deletedRides.count;
+      });
+
+      this.logger.log(`✅ Limpeza concluída: ${result} rides órfãs removidas`);
+
+      return {
+        success: true,
+        data: {
+          clearedRides: result,
+          oldestRideAge: `${oldestAge} minutos`,
+          details: orphanedRides.map(ride => ({
+            id: ride.id,
+            status: ride.status,
+            passengerName: ride.passenger?.user?.firstName || 'N/A',
+            ageMinutes: Math.floor((Date.now() - ride.createdAt.getTime()) / (1000 * 60)),
+          }))
+        },
+        message: `${result} rides órfãs removidas com sucesso`,
+      };
+
+    } catch (error) {
+      this.logger.error(`❌ Erro na limpeza de rides órfãs: ${error.message}`, error.stack);
+      return {
+        success: false,
+        data: {
+          clearedRides: 0,
+          oldestRideAge: null,
+        },
+        message: `Erro na limpeza: ${error.message}`,
+      };
+    }
   }
 }

@@ -219,7 +219,7 @@ export class RideTypesController {
   }
 
   @Post('calculate-price')
-  @Throttle({ default: { limit: 60, ttl: 1000 } })
+  @Throttle({ default: { limit: 30, ttl: 10000 } }) // 30 requests por 10 segundos (mais distribuído)
   @ApiOperation({
     summary: 'Calcular preço para um tipo de corrida',
     description:

@@ -169,6 +169,7 @@ export class DriversController {
   @Patch(':driverId/availability')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
+  @Throttle({ default: { limit: 5, ttl: 10000 } }) // 5 requests per 10 seconds for availability updates
   @ApiOperation({ summary: 'Atualizar disponibilidade do motorista' })
   @ApiResponse({
     status: 200,

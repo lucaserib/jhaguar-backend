@@ -530,6 +530,62 @@ export class RidesController {
     return this.ridesService.cancelRideNew(driverId, rideId, cancelRideDto);
   }
 
+  @Post('search-options')
+  @ApiOperation({
+    summary: 'Buscar opções de corrida disponíveis',
+    description: 'Retorna apenas tipos de corrida que têm motoristas online disponíveis na região',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Opções de corrida encontradas com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              rideType: { type: 'object' },
+              availableDrivers: { type: 'array' },
+              estimatedPrice: { type: 'number' },
+              estimatedDuration: { type: 'number' },
+              estimatedDistance: { type: 'number' },
+            },
+          },
+        },
+        metadata: {
+          type: 'object',
+          properties: {
+            totalOptions: { type: 'number' },
+            searchRadius: { type: 'number' },
+            timestamp: { type: 'string' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Dados de busca inválidos' })
+  @ApiResponse({ status: 404, description: 'Nenhuma opção encontrada' })
+  async searchRideOptions(
+    @Body()
+    searchDto: {
+      origin: { latitude: number; longitude: number; address: string };
+      destination: { latitude: number; longitude: number; address: string };
+      userGender?: 'M' | 'F';
+      passengerId: string;
+      preferences?: {
+        maxPrice?: number;
+        maxWaitTime?: number;
+        rideTypeIds?: string[];
+        hasPets?: boolean;
+      };
+    },
+    @User() user: any,
+  ) {
+    return this.ridesService.searchAvailableRideOptions(user.id, searchDto);
+  }
+
   @Get('my/driver-new')
   @ApiOperation({ summary: 'Buscar corridas do motorista (nova versão)' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
@@ -568,5 +624,76 @@ export class RidesController {
       offsetNum,
       status,
     );
+  }
+
+  @Post('cleanup/orphaned')
+  @ApiOperation({
+    summary: 'Limpar rides órfãs e pendentes',
+    description: 'Remove rides em estados pendentes há mais de 10 minutos para evitar bloqueios'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Limpeza executada com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            clearedRides: { type: 'number' },
+            oldestRideAge: { type: 'string' },
+          },
+        },
+        message: { type: 'string' },
+      },
+    },
+  })
+  async cleanupOrphanedRides(@User() user?: any) {
+    return this.ridesService.cleanupOrphanedRides(user?.id);
+  }
+
+  @Get('status/pending')
+  @ApiOperation({
+    summary: 'Verificar rides pendentes',
+    description: 'Lista rides em estados pendentes para debug'
+  })
+  async checkPendingRides() {
+    try {
+      const pendingRides = await this.ridesService['prisma'].ride.findMany({
+        where: {
+          status: {
+            in: ['REQUESTED', 'ACCEPTED', 'IN_PROGRESS'],
+          },
+        },
+        include: {
+          passenger: {
+            include: { user: true }
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      return {
+        success: true,
+        data: {
+          count: pendingRides.length,
+          rides: pendingRides.map(ride => ({
+            id: ride.id,
+            status: ride.status,
+            passengerName: ride.passenger?.user?.firstName || 'N/A',
+            origin: ride.originAddress,
+            createdAt: ride.createdAt,
+            ageMinutes: Math.floor((Date.now() - ride.createdAt.getTime()) / (1000 * 60)),
+          }))
+        },
+        message: `${pendingRides.length} rides pendentes encontradas`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: { count: 0, rides: [] },
+        message: `Erro ao verificar rides: ${error.message}`,
+      };
+    }
   }
 }

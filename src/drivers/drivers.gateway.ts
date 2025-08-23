@@ -15,7 +15,7 @@ import { JwtService } from '@nestjs/jwt';
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  namespace: '/driver',
+  namespace: '/drivers',
 })
 export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
@@ -114,10 +114,130 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @SubscribeMessage('driver:accept-ride')
+  async handleAcceptRide(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { 
+      rideId: string; 
+      driverId: string; 
+      acceptedAt: string;
+      currentLocation?: { latitude: number; longitude: number };
+      estimatedPickupTime?: number;
+    },
+  ) {
+    try {
+      this.logger.log(`Driver ${data.driverId} accepting ride ${data.rideId}`);
+      
+      // Chamar o serviço de corridas para processar a aceitação
+      const result = await this.driversService.acceptRideRequest(data.driverId, data.rideId, {
+        currentLocation: data.currentLocation || { latitude: 0, longitude: 0 },
+        estimatedPickupTime: data.estimatedPickupTime || 10
+      });
+
+      if (result.success) {
+        // Confirmar para o motorista que a ação foi processada
+        client.emit('ride:accept-confirmed', {
+          rideId: data.rideId,
+          status: 'accepted',
+          timestamp: new Date(),
+        });
+
+        // Emitir para o sistema de corridas que a corrida foi aceita
+        this.server.emit('ride:driver-accepted', {
+          rideId: data.rideId,
+          driverId: data.driverId,
+          acceptedAt: data.acceptedAt,
+          timestamp: new Date(),
+        });
+      } else {
+        throw new Error(result.message || 'Falha ao aceitar corrida');
+      }
+    } catch (error) {
+      this.logger.error(`Error accepting ride: ${error.message}`);
+      client.emit('error', {
+        message: 'Erro ao aceitar corrida',
+        code: 'ACCEPT_RIDE_ERROR',
+        rideId: data.rideId,
+      });
+    }
+  }
+
+  @SubscribeMessage('driver:reject-ride')
+  async handleRejectRide(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { 
+      rideId: string; 
+      driverId: string; 
+      reason?: string; 
+      rejectedAt: string 
+    },
+  ) {
+    try {
+      this.logger.log(`Driver ${data.driverId} rejecting ride ${data.rideId}`);
+      
+      // Emitir para o sistema de corridas que a corrida foi rejeitada
+      this.server.emit('ride:driver-rejected', {
+        rideId: data.rideId,
+        driverId: data.driverId,
+        reason: data.reason || 'Não disponível no momento',
+        rejectedAt: data.rejectedAt,
+        timestamp: new Date(),
+      });
+
+      // Confirmar para o motorista que a ação foi processada
+      client.emit('ride:reject-confirmed', {
+        rideId: data.rideId,
+        status: 'rejected',
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      this.logger.error(`Error rejecting ride: ${error.message}`);
+      client.emit('error', {
+        message: 'Erro ao rejeitar corrida',
+        code: 'REJECT_RIDE_ERROR',
+        rideId: data.rideId,
+      });
+    }
+  }
+
+  @SubscribeMessage('driver:status-update')
+  async handleDriverStatusUpdate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { driverId: string; status: string; timestamp: string },
+  ) {
+    try {
+      this.logger.log(`Driver ${data.driverId} updating status to ${data.status}`);
+      
+      // Broadcast status change
+      this.server.emit('driver:status-changed', {
+        driverId: data.driverId,
+        status: data.status,
+        timestamp: new Date(),
+      });
+
+      // Confirmar para o motorista
+      client.emit('driver:status-confirmed', {
+        status: data.status,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      this.logger.error(`Error updating driver status: ${error.message}`);
+      client.emit('error', {
+        message: 'Erro ao atualizar status',
+        code: 'STATUS_UPDATE_ERROR',
+      });
+    }
+  }
+
+  @SubscribeMessage('ping')
+  handlePing(@ConnectedSocket() client: Socket) {
+    client.emit('pong', { timestamp: new Date() });
+  }
+
   // Métodos para emitir eventos para motoristas específicos
   emitNewRideRequest(driverId: string, request: any) {
     this.logger.log(`Emitting new ride request to driver ${driverId}`);
-    this.server.to(`driver:${driverId}`).emit('ride:new-request', request);
+    this.server.to(`driver:${driverId}`).emit('new-ride-request', request);
   }
 
   emitRideRequestCancelled(driverId: string, rideId: string) {

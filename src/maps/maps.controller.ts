@@ -150,7 +150,7 @@ export class MapsController {
   }
 
   @Post('nearby-drivers')
-  @Throttle({ default: { limit: 100, ttl: 1000 } })
+  @Throttle({ default: { limit: 200, ttl: 10000 } })
   @ApiOperation({
     summary: 'Buscar motoristas próximos',
     description:
@@ -238,7 +238,7 @@ export class MapsController {
   }
 
   @Post('calculate-route')
-  @Throttle({ default: { limit: 100, ttl: 1000 } })
+  @Throttle({ default: { limit: 30, ttl: 3000 } })
   @ApiOperation({
     summary: 'Calcular rota entre dois pontos',
     description:

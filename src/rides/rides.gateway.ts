@@ -13,7 +13,6 @@ import { JwtService } from '@nestjs/jwt';
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  namespace: '/ride',
 })
 export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
@@ -219,8 +218,22 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(
       `Broadcasting ride ${ride.id} to ${targetDriverIds.length} drivers`,
     );
+    this.logger.log(
+      `🎯 Target driver IDs: ${JSON.stringify(targetDriverIds)}`,
+    );
 
-    const connectedDriverSockets = Array.from(this.connectedUsers.entries())
+    const allConnectedUsers = Array.from(this.connectedUsers.entries());
+    this.logger.log(
+      `👥 All connected users: ${allConnectedUsers.length}`,
+    );
+    
+    allConnectedUsers.forEach(([socketId, userData]) => {
+      this.logger.log(
+        `🔌 Connected: ${socketId} -> userId: ${userData.userId}, type: ${userData.userType}`,
+      );
+    });
+
+    const connectedDriverSockets = allConnectedUsers
       .filter(
         ([_, userData]) =>
           userData.userType === 'driver' &&
@@ -228,8 +241,13 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       )
       .map(([socketId]) => socketId);
 
+    this.logger.log(
+      `🚗 Connected driver sockets matching target: ${connectedDriverSockets.length}`,
+    );
+
     connectedDriverSockets.forEach((socketId) => {
-      this.server.to(socketId).emit('ride:new-request', ride);
+      this.logger.log(`📤 Sending ride request to socket: ${socketId}`);
+      this.server.to(socketId).emit('new-ride-request', ride);
     });
   }
 

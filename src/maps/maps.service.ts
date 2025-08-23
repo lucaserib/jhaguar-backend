@@ -1066,6 +1066,8 @@ export class MapsService {
     } = request;
 
     try {
+      this.logger.log(`🔍 Finding drivers for ride type: ${rideTypeId}, lat: ${latitude}, lng: ${longitude}, radius: ${radius}`);
+      
       const driverFilters: any = {
         isOnline: true,
         isAvailable: true,
@@ -1073,6 +1075,8 @@ export class MapsService {
         currentLatitude: { not: null },
         currentLongitude: { not: null },
       };
+      
+      this.logger.log(`📋 Base driver filters:`, JSON.stringify(driverFilters, null, 2));
 
       if (rideTypeId) {
         driverFilters.driverRideTypes = {
@@ -1100,6 +1104,8 @@ export class MapsService {
           isArmored: true,
         };
       }
+
+      this.logger.log(`🔍 Final driver filters:`, JSON.stringify(driverFilters, null, 2));
 
       const drivers = await this.prisma.driver.findMany({
         where: driverFilters,
@@ -1134,6 +1140,15 @@ export class MapsService {
         },
         take: limit * 2,
       });
+      
+      this.logger.log(`🚗 Found ${drivers.length} drivers in database:`, drivers.map(d => ({
+        id: d.id,
+        isOnline: d.isOnline,
+        isAvailable: d.isAvailable,
+        accountStatus: d.accountStatus,
+        rideTypes: d.driverRideTypes.map(rt => rt.rideType.name),
+        location: [d.currentLatitude, d.currentLongitude]
+      })));
 
       if (drivers.length > 0) {
         const nearbyDrivers: DriverWithDistance[] = [];
@@ -1168,9 +1183,17 @@ export class MapsService {
         }
 
         nearbyDrivers.sort((a, b) => (a.distance || 0) - (b.distance || 0));
+        
+        this.logger.log(`📍 ${nearbyDrivers.length} drivers within radius:`, nearbyDrivers.map(d => ({
+          id: d.id,
+          distance: d.distance,
+          estimatedTime: d.estimatedTime
+        })));
+        
         return nearbyDrivers.slice(0, limit);
       }
 
+      this.logger.log(`❌ No drivers found for ride type`);
       return [];
     } catch (error) {
       this.logger.error('Erro ao buscar motoristas por tipo:', error);

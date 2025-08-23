@@ -1,7 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDriverDto } from './dto/create-driver.dto';
-import { Status } from '@prisma/client';
+import { Status, RideStatus } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
 import { LocationUpdateDto } from './dto/location-update.dto';
@@ -323,19 +330,23 @@ export class DriversService {
     });
 
     if (!driver) {
-      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
     }
 
     const updatedDriver = await this.prisma.driver.update({
       where: { id: driverId },
-      data: { 
+      data: {
         accountStatus: status,
       },
       include: { user: true },
     });
 
     // Log de auditoria
-    this.logger.log(`Driver status updated: ${driverId} from ${driver.accountStatus} to ${status}`);
+    this.logger.log(
+      `Driver status updated: ${driverId} from ${driver.accountStatus} to ${status}`,
+    );
 
     return {
       success: true,
@@ -347,13 +358,18 @@ export class DriversService {
     };
   }
 
-  async updateAvailability(driverId: string, updateData: UpdateAvailabilityDto) {
+  async updateAvailability(
+    driverId: string,
+    updateData: UpdateAvailabilityDto,
+  ) {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
     });
 
     if (!driver) {
-      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
     }
 
     const updateFields: any = {
@@ -404,19 +420,27 @@ export class DriversService {
     };
   }
 
-  async updateLocationWithCache(driverId: string, locationData: LocationUpdateDto) {
+  async updateLocationWithCache(
+    driverId: string,
+    locationData: LocationUpdateDto,
+  ) {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
     });
 
     if (!driver) {
-      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
     }
 
     // Rate limiting check via Redis
-    const updateCount = await this.redisService.incrementDriverLocationUpdates(driverId);
+    const updateCount =
+      await this.redisService.incrementDriverLocationUpdates(driverId);
     if (updateCount > 1) {
-      throw new BadRequestException('Rate limit exceeded: maximum 1 location update per second');
+      throw new BadRequestException(
+        'Rate limit exceeded: maximum 1 location update per second',
+      );
     }
 
     // Atualizar no banco de dados
@@ -463,13 +487,18 @@ export class DriversService {
     };
   }
 
-  async getDriverStats(driverId: string, period?: StatsPeriod): Promise<DriverStatsResponseDto> {
+  async getDriverStats(
+    driverId: string,
+    period?: StatsPeriod,
+  ): Promise<DriverStatsResponseDto> {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
     });
 
     if (!driver) {
-      throw new NotFoundException(`Motorista com ID ${driverId} não encontrado`);
+      throw new NotFoundException(
+        `Motorista com ID ${driverId} não encontrado`,
+      );
     }
 
     const startDate = this.getStartDateForPeriod(period || StatsPeriod.TODAY);
@@ -490,26 +519,36 @@ export class DriversService {
       },
     });
 
-    const completedRides = rides.filter(ride => ride.status === 'COMPLETED');
-    const cancelledRides = rides.filter(ride => ride.status === 'CANCELLED');
+    const completedRides = rides.filter((ride) => ride.status === 'COMPLETED');
+    const cancelledRides = rides.filter((ride) => ride.status === 'CANCELLED');
 
     // Calcular estatísticas
-    const totalEarnings = completedRides.reduce((sum, ride) => sum + (ride.finalPrice || 0), 0);
-    const totalDistance = completedRides.reduce((sum, ride) => sum + (ride.actualDistance || 0), 0);
-    
-    const ratings = rides.flatMap(ride => ride.ratings);
-    const avgRating = ratings.length > 0 
-      ? ratings.reduce((sum, rating) => sum + rating.rating, 0) / ratings.length 
-      : 0;
+    const totalEarnings = completedRides.reduce(
+      (sum, ride) => sum + (ride.finalPrice || 0),
+      0,
+    );
+    const totalDistance = completedRides.reduce(
+      (sum, ride) => sum + (ride.actualDistance || 0),
+      0,
+    );
+
+    const ratings = rides.flatMap((ride) => ride.ratings);
+    const avgRating =
+      ratings.length > 0
+        ? ratings.reduce((sum, rating) => sum + rating.rating, 0) /
+          ratings.length
+        : 0;
 
     // Calcular taxa de aceitação (seria necessário ter dados de solicitações rejeitadas)
-    const acceptanceRate = rides.length > 0 ? (completedRides.length / rides.length) * 100 : 0;
+    const acceptanceRate =
+      rides.length > 0 ? (completedRides.length / rides.length) * 100 : 0;
 
     return {
       earnings: {
         total: totalEarnings,
         count: completedRides.length,
-        average: completedRides.length > 0 ? totalEarnings / completedRides.length : 0,
+        average:
+          completedRides.length > 0 ? totalEarnings / completedRides.length : 0,
       },
       rides: {
         completed: completedRides.length,
@@ -522,7 +561,8 @@ export class DriversService {
       },
       distance: {
         total_km: totalDistance,
-        average_per_ride: completedRides.length > 0 ? totalDistance / completedRides.length : 0,
+        average_per_ride:
+          completedRides.length > 0 ? totalDistance / completedRides.length : 0,
       },
       onlineTime: {
         total_hours: 0, // Seria calculado com base em logs de online/offline
@@ -535,13 +575,19 @@ export class DriversService {
     try {
       await this.redisService.setDriverLocation(driverId, locationData);
     } catch (error) {
-      this.logger.error(`Error updating location cache for driver ${driverId}: ${error.message}`);
+      this.logger.error(
+        `Error updating location cache for driver ${driverId}: ${error.message}`,
+      );
     }
   }
 
   private getStartDateForPeriod(period: StatsPeriod): Date {
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
 
     switch (period) {
       case StatsPeriod.TODAY:
@@ -559,8 +605,9 @@ export class DriversService {
 
   async getDriverLocationFromCache(driverId: string) {
     try {
-      const cachedLocation = await this.redisService.getDriverLocation(driverId);
-      
+      const cachedLocation =
+        await this.redisService.getDriverLocation(driverId);
+
       if (cachedLocation) {
         return cachedLocation;
       }
@@ -600,6 +647,134 @@ export class DriversService {
     } catch (error) {
       this.logger.error(`Error getting driver location: ${error.message}`);
       return null;
+    }
+  }
+
+  // Método para aceitar solicitação de corrida
+  async acceptRideRequest(
+    driverId: string,
+    rideId: string,
+    acceptData: {
+      currentLocation: { latitude: number; longitude: number };
+      estimatedPickupTime: number;
+    },
+  ) {
+    try {
+      this.logger.log(`Driver ${driverId} attempting to accept ride ${rideId}`);
+
+      const driver = await this.prisma.driver.findUnique({
+        where: {
+          id: driverId,
+          isOnline: true,
+          isAvailable: true,
+          accountStatus: 'APPROVED',
+        },
+        include: { user: true, vehicle: true },
+      });
+
+      if (!driver) {
+        throw new BadRequestException(
+          'Motorista não encontrado ou não está disponível',
+        );
+      }
+
+      // Verificar se a corrida existe e está pendente
+      const ride = await this.prisma.ride.findUnique({
+        where: {
+          id: rideId,
+          status: RideStatus.REQUESTED,
+          driverId: null, // Ainda não foi aceita por ninguém
+        },
+        include: {
+          passenger: { include: { user: true } },
+          RideTypeConfig: true,
+        },
+      });
+
+      if (!ride) {
+        throw new BadRequestException(
+          'Corrida não encontrada ou já foi aceita',
+        );
+      }
+
+      // Atualizar a corrida e o motorista em uma transação
+      const result = await this.prisma.$transaction(async (tx) => {
+        // Aceitar a corrida
+        const updatedRide = await tx.ride.update({
+          where: { id: rideId },
+          data: {
+            driverId,
+            vehicleId: driver.vehicle?.id,
+            status: RideStatus.ACCEPTED,
+            acceptTime: new Date(),
+          },
+          include: {
+            passenger: { include: { user: true } },
+            driver: { include: { user: true, vehicle: true } },
+            RideTypeConfig: true,
+          },
+        });
+
+        // Marcar motorista como ocupado
+        await tx.driver.update({
+          where: { id: driverId },
+          data: {
+            isAvailable: false,
+            isActiveTrip: true,
+          },
+        });
+
+        // Criar histórico de status
+        await tx.rideStatusHistory.create({
+          data: {
+            rideId,
+            driverId,
+            previousStatus: 'REQUESTED',
+            newStatus: 'ACCEPTED',
+            locationLatitude: acceptData.currentLocation.latitude,
+            locationLongitude: acceptData.currentLocation.longitude,
+            notes: `Aceita pelo motorista ${driver.user.firstName}`,
+          },
+        });
+
+        return updatedRide;
+      });
+
+      this.logger.log(
+        `✅ Ride ${rideId} successfully accepted by driver ${driverId}`,
+      );
+
+      return {
+        success: true,
+        data: {
+          rideId: result.id,
+          status: 'accepted',
+          acceptedAt: result.acceptTime,
+          estimatedPickupTime: acceptData.estimatedPickupTime,
+          driver: {
+            id: driver.id,
+            name: `${driver.user.firstName} ${driver.user.lastName}`,
+            phone: driver.user.phone,
+            rating: driver.averageRating,
+            vehicle: driver.vehicle
+              ? {
+                  model: driver.vehicle.model,
+                  color: driver.vehicle.color,
+                  licensePlate: driver.vehicle.licensePlate,
+                }
+              : null,
+          },
+        },
+        message: 'Corrida aceita com sucesso',
+      };
+    } catch (error) {
+      this.logger.error(`Error accepting ride ${rideId}:`, error);
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Erro ao aceitar corrida',
+      };
     }
   }
 }
