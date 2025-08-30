@@ -15,7 +15,7 @@ import { JwtService } from '@nestjs/jwt';
 
 @WebSocketGateway({
   cors: { origin: '*' },
-  namespace: '/drivers',
+  // Remover namespace separado - usar o mesmo namespace do RideGateway
 })
 export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;

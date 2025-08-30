@@ -254,7 +254,49 @@ export class RidesService {
             `Passageiro ${passenger.id} já tem corrida ativa: ${existingRide.id} (status: ${existingRide.status}, idade: ${ageMinutes}min)`,
           );
           
-          // Incluir informações da ride existente na resposta
+          // NOVO: Se a corrida foi aceita por motorista (race condition), retornar dados da corrida aceita
+          if (existingRide.status === RideStatus.ACCEPTED || existingRide.status === RideStatus.IN_PROGRESS) {
+            this.logger.log(`✅ Corrida já foi aceita, retornando dados da corrida existente: ${existingRide.id}`);
+            
+            // Buscar dados completos da corrida aceita
+            const rideWithDetails = await this.prisma.ride.findUnique({
+              where: { id: existingRide.id },
+              include: {
+                passenger: { include: { user: true } },
+                driver: { include: { user: true, vehicle: true } },
+                RideTypeConfig: true,
+                payment: true,
+              },
+            });
+
+            // Notificar passageiro via WebSocket que a corrida foi aceita
+            if (rideWithDetails?.driver) {
+              this.rideGateway.emitToRide(existingRide.id, 'ride:accepted', {
+                rideId: existingRide.id,
+                driver: {
+                  id: rideWithDetails.driver?.id,
+                  driverId: rideWithDetails.driver?.id,
+                  driverName: `${rideWithDetails.driver?.user?.firstName || ''} ${rideWithDetails.driver?.user?.lastName || ''}`,
+                  profileImage: rideWithDetails.driver?.user?.profileImage,
+                  driverRating: rideWithDetails.driver?.averageRating || 5.0,
+                  vehicle: rideWithDetails.driver?.vehicle,
+                  latitude: rideWithDetails.driver?.currentLatitude || 0,
+                  longitude: rideWithDetails.driver?.currentLongitude || 0,
+                },
+                estimatedArrival: 5,
+                finalPrice: rideWithDetails.finalPrice,
+                status: rideWithDetails.status
+              });
+            }
+
+            return {
+              success: true,
+              data: rideWithDetails,
+              message: 'Corrida já foi aceita por um motorista',
+            };
+          }
+          
+          // Para status REQUESTED, incluir informações da ride existente na resposta
           throw new BadRequestException({
             message: 'Você já tem uma corrida em andamento',
             details: {
@@ -1104,15 +1146,32 @@ export class RidesService {
           `👥 UserIDs para notificar: ${JSON.stringify(driverUserIds)}`,
         );
 
-        // Enviar via WebSocket através do RideGateway
-        if (this.rideGateway && driverUserIds.length > 0) {
-          this.rideGateway.broadcastRideRequest(rideRequestData, driverUserIds);
-          this.logger.log(
-            `✅ Corrida ${ride.id} enviada via WebSocket para ${driverUserIds.length} motoristas`,
-          );
+        // CORREÇÃO: Enviar via WebSocket com logs mais detalhados
+        if (this.rideGateway) {
+          if (driverUserIds.length > 0) {
+            this.logger.log(
+              `🚨 🚨 CALLING RIDE GATEWAY BROADCAST 🚨 🚨`,
+            );
+            this.logger.log(
+              `🎯 Ride: ${ride.id} | Drivers to notify: ${driverUserIds.length}`,
+            );
+            this.logger.log(
+              `👥 Driver UserIDs: ${JSON.stringify(driverUserIds)}`,
+            );
+            
+            this.rideGateway.broadcastRideRequest(rideRequestData, driverUserIds);
+            
+            this.logger.log(
+              `✅ ✅ RIDE BROADCAST INITIATED for ride ${ride.id} ✅ ✅`,
+            );
+          } else {
+            this.logger.warn(
+              `⚠️ NO DRIVER USER IDS to notify for ride ${ride.id}`,
+            );
+          }
         } else {
-          this.logger.warn(
-            `⚠️ RideGateway não disponível ou nenhum motorista conectado`,
+          this.logger.error(
+            `❌ RideGateway NÃO ESTÁ DISPONÍVEL! Cannot broadcast ride ${ride.id}`,
           );
         }
 
@@ -1327,6 +1386,39 @@ export class RidesService {
 
       this.logger.log(`Ride ${rideId} accepted by driver ${driverId}`);
 
+      // Notificar o passageiro via WebSocket
+      try {
+        // Usar o gateway de rides para emitir a notificação
+        if (this.rideGateway) {
+          this.rideGateway.emitRideAccepted(rideId, {
+            driverId: updatedRide.driver?.id,
+            driverName: `${updatedRide.driver?.user?.firstName || ''} ${updatedRide.driver?.user?.lastName || ''}`,
+            driverRating: updatedRide.driver?.averageRating,
+            vehicle: updatedRide.driver?.vehicle,
+            estimatedArrival: acceptData.estimatedPickupTime,
+          });
+          this.logger.log(`✅ WebSocket notification sent to passenger for ride ${rideId}`);
+        }
+
+        // Também usar o serviço de notificações
+        if (this.notificationsService) {
+          await this.notificationsService.notifyRideAccepted(
+            updatedRide.passengerId,
+            rideId,
+            {
+              driverId: updatedRide.driver?.id,
+              driverName: `${updatedRide.driver?.user?.firstName || ''} ${updatedRide.driver?.user?.lastName || ''}`,
+              driverRating: updatedRide.driver?.averageRating,
+              vehicle: updatedRide.driver?.vehicle,
+              estimatedArrival: acceptData.estimatedPickupTime,
+            }
+          );
+        }
+      } catch (notificationError) {
+        this.logger.warn(`Warning: Failed to send notification for accepted ride ${rideId}:`, notificationError);
+        // Não falhar a operação se a notificação falhar
+      }
+
       return {
         success: true,
         data: {
@@ -1476,6 +1568,15 @@ export class RidesService {
         },
       );
 
+      // Notify passenger via WebSocket
+      this.rideGateway.emitToRide(rideId, 'ride:started', {
+        rideId,
+        status: 'in_progress',
+        message: 'Viagem iniciada! Boa viagem!',
+        startedAt: startData.startedAt,
+        route: startData.route,
+      });
+
       this.logger.log(`Ride ${rideId} started by driver ${driverId}`);
 
       return {
@@ -1559,6 +1660,20 @@ export class RidesService {
       );
 
       const driverEarnings = (ride.finalPrice || 0) * 0.9;
+
+      // Notify passenger via WebSocket
+      this.rideGateway.emitToRide(rideId, 'ride:completed', {
+        rideId,
+        status: 'completed',
+        message: 'Viagem concluída! Obrigado por usar o JhaguarClean',
+        completedAt: completeData.completedAt,
+        finalPrice: ride.finalPrice,
+        summary: {
+          distance: completeData.actualDistance,
+          duration: completeData.actualDuration,
+          finalLocation: completeData.finalLocation,
+        },
+      });
 
       this.logger.log(
         `Ride ${rideId} completed by driver ${driverId}. Earnings: ${driverEarnings}`,

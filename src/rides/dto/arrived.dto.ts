@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, ValidateNested } from 'class-validator';
+import { IsDateString, ValidateNested, IsNumber, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class CurrentLocationDto {
@@ -7,12 +7,14 @@ class CurrentLocationDto {
     description: 'Latitude da localização atual',
     example: -23.5505,
   })
+  @IsNumber()
   lat: number;
 
   @ApiProperty({
     description: 'Longitude da localização atual',
     example: -46.6333,
   })
+  @IsNumber()
   lng: number;
 }
 

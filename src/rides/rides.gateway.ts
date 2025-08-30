@@ -28,7 +28,15 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const userType = this.extractUserType(client);
 
     this.logger.log(
-      `User connected: ${client.id}, userId: ${userId}, type: ${userType}`,
+      `🔌 User connected: ${client.id}, userId: ${userId}, type: ${userType}`,
+    );
+    this.logger.log(
+      `🔑 Connection details: ${JSON.stringify({
+        token: client.handshake.auth?.token ? '✅ Present' : '❌ Missing',
+        userType: client.handshake.auth?.userType || client.handshake.query.userType,
+        driverId: client.handshake.auth?.driverId,
+        userId: client.handshake.auth?.userId,
+      })}`,
     );
 
     if (userId && userType) {
@@ -37,6 +45,16 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
         userId,
         userType,
       });
+      this.logger.log(
+        `✅ User registered: ${client.id} -> ${userId} (${userType})`,
+      );
+      this.logger.log(
+        `👥 Total connected users: ${this.connectedUsers.size}`,
+      );
+    } else {
+      this.logger.warn(
+        `❌ Failed to register user: ${client.id} (userId: ${userId}, userType: ${userType})`,
+      );
     }
   }
 
@@ -216,24 +234,35 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   broadcastRideRequest(ride: any, targetDriverIds: string[]) {
     this.logger.log(
-      `Broadcasting ride ${ride.id} to ${targetDriverIds.length} drivers`,
+      `🚀 🚨 BROADCASTING RIDE REQUEST - INÍCIO 🚨`,
     );
     this.logger.log(
-      `🎯 Target driver IDs: ${JSON.stringify(targetDriverIds)}`,
+      `🎯 Ride ID: ${ride.id} | Target drivers: ${targetDriverIds.length}`,
+    );
+    this.logger.log(
+      `🎯 Target driver userIds: ${JSON.stringify(targetDriverIds)}`,
     );
 
     const allConnectedUsers = Array.from(this.connectedUsers.entries());
     this.logger.log(
-      `👥 All connected users: ${allConnectedUsers.length}`,
+      `👥 Total connected users: ${allConnectedUsers.length}`,
     );
     
-    allConnectedUsers.forEach(([socketId, userData]) => {
+    const connectedDrivers = allConnectedUsers.filter(([_, userData]) => userData.userType === 'driver');
+    this.logger.log(
+      `🚗 Connected drivers: ${connectedDrivers.length}`,
+    );
+
+    // Log detalhado de todos os motoristas conectados
+    connectedDrivers.forEach(([socketId, userData]) => {
+      const isTarget = targetDriverIds.includes(userData.userId);
       this.logger.log(
-        `🔌 Connected: ${socketId} -> userId: ${userData.userId}, type: ${userData.userType}`,
+        `🚗 Driver conectado: ${userData.userId} (socket: ${socketId}) - ${isTarget ? '✅ TARGET' : '⚠️ NOT TARGET'}`,
       );
     });
-
-    const connectedDriverSockets = allConnectedUsers
+    
+    // CORREÇÃO: Buscar motoristas específicos primeiro, depois fallback
+    let connectedDriverSockets = allConnectedUsers
       .filter(
         ([_, userData]) =>
           userData.userType === 'driver' &&
@@ -242,13 +271,40 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .map(([socketId]) => socketId);
 
     this.logger.log(
-      `🚗 Connected driver sockets matching target: ${connectedDriverSockets.length}`,
+      `🎯 Specific target drivers connected: ${connectedDriverSockets.length}`,
     );
 
+    // CORREÇÃO CRÍTICA: Se nenhum motorista específico está conectado, usar TODOS os motoristas conectados
+    if (connectedDriverSockets.length === 0) {
+      this.logger.warn(
+        `⚠️ ZERO target drivers connected! Using FALLBACK: sending to ALL connected drivers`,
+      );
+      
+      connectedDriverSockets = connectedDrivers.map(([socketId]) => socketId);
+      
+      this.logger.log(
+        `🔄 FALLBACK: Sending to ${connectedDriverSockets.length} connected drivers`,
+      );
+      
+      if (connectedDriverSockets.length === 0) {
+        this.logger.error(
+          `❌ NO DRIVERS CONNECTED AT ALL! Cannot broadcast ride request.`,
+        );
+        return;
+      }
+    }
+
+    this.logger.log(
+      `📤 Final decision: Sending to ${connectedDriverSockets.length} driver sockets`,
+    );
+
+    // Enviar para todos os sockets selecionados
     connectedDriverSockets.forEach((socketId) => {
-      this.logger.log(`📤 Sending ride request to socket: ${socketId}`);
+      this.logger.log(`📨 🚨 SENDING RIDE REQUEST to socket: ${socketId}`);
       this.server.to(socketId).emit('new-ride-request', ride);
     });
+    
+    this.logger.log(`✅ 🚨 BROADCAST COMPLETED! Sent to ${connectedDriverSockets.length} drivers 🚨`);
   }
 
   broadcastRideRequestExpired(
