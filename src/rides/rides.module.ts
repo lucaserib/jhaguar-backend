@@ -1,6 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { IdempotencyService } from '../common/services/idempotency.service';
-import { CommonRedisModule } from '../common/redis/redis.module';
+import { RedisModule } from '../common/redis/redis.module';
 import { RidesController } from './rides.controller';
 import { RidesService } from './rides.service';
 import { RideGateway } from './rides.gateway';
@@ -14,12 +14,15 @@ import { JwtModule } from '@nestjs/jwt';
 @Module({
   imports: [
     PrismaModule,
-    JwtModule.register({}),
+    JwtModule.register({
+      secret: process.env.JWT_SECRET || 'dev-secret-key',
+      signOptions: { expiresIn: '7d' },
+    }),
     MapsModule,
     RideTypesModule,
     PaymentsModule,
     forwardRef(() => NotificationsModule),
-    CommonRedisModule,
+    RedisModule,
   ],
   controllers: [RidesController],
   providers: [RidesService, RideGateway, IdempotencyService],

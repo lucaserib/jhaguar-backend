@@ -18,8 +18,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { MapsModule } from './maps/maps.module';
 import { RideTypesModule } from './ride-types/ride-types.module';
 import { StripeModule } from './stripe/stripe.module';
-import { CommonRedisService } from './common/redis/redis.service';
-import { CommonRedisModule } from './common/redis/redis.module';
+import { RedisModule } from './common/redis/redis.module';
 
 @Module({
   imports: [
@@ -31,21 +30,21 @@ import { CommonRedisModule } from './common/redis/redis.module';
       {
         name: 'short',
         ttl: 1000, // 1 second
-        limit: 50, // 50 requests per second (mais restritivo para controle geral)
+        limit: 20, // PRODUÇÃO: 20 requests per second (seguro para produção)
       },
       {
         name: 'medium',
         ttl: 10000, // 10 seconds
-        limit: 200, // 200 requests per 10 seconds (mais restritivo)
+        limit: 100, // PRODUÇÃO: 100 requests per 10 seconds (equilibrado)
       },
       {
         name: 'long',
         ttl: 60000, // 1 minute
-        limit: 1000, // 1000 requests per minute (mais restritivo)
+        limit: 500, // PRODUÇÃO: 500 requests per minute (seguro)
       },
     ]),
     PrismaModule,
-    CommonRedisModule,
+    RedisModule,
     AuthModule,
     UsersModule,
     DriversModule,

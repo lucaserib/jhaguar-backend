@@ -1,22 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, ValidateNested, IsNumber, IsOptional } from 'class-validator';
+import { IsDateString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
-
-class CurrentLocationDto {
-  @ApiProperty({
-    description: 'Latitude da localização atual',
-    example: -23.5505,
-  })
-  @IsNumber()
-  lat: number;
-
-  @ApiProperty({
-    description: 'Longitude da localização atual',
-    example: -46.6333,
-  })
-  @IsNumber()
-  lng: number;
-}
+import { LocationDto } from '../../common/dto/location.dto';
 
 export class ArrivedDto {
   @ApiProperty({
@@ -24,13 +9,13 @@ export class ArrivedDto {
     example: '2024-08-06T18:15:00.000Z',
   })
   @IsDateString()
-  arrivedAt: Date;
+  arrivedAt: string;
 
   @ApiProperty({
     description: 'Localização atual do motorista',
-    type: CurrentLocationDto,
+    type: LocationDto,
   })
   @ValidateNested()
-  @Type(() => CurrentLocationDto)
-  currentLocation: CurrentLocationDto;
+  @Type(() => LocationDto)
+  currentLocation: LocationDto;
 }

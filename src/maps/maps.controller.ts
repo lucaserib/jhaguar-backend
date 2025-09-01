@@ -30,7 +30,6 @@ import {
   GeocodeResponse,
 } from './dto';
 import { NearbyDriversDto } from './dto/nearby-drivers.dto';
-import { CalculateRouteNewDto } from './dto/calculate-route-new.dto';
 import { Gender } from '@prisma/client';
 
 @ApiTags('Maps & Localização')
@@ -238,7 +237,7 @@ export class MapsController {
   }
 
   @Post('calculate-route')
-  @Throttle({ default: { limit: 30, ttl: 3000 } })
+  @Throttle({ default: { limit: 30, ttl: 10000 } }) // PRODUÇÃO: 30 requests per 10 seconds (equilibrado)
   @ApiOperation({
     summary: 'Calcular rota entre dois pontos',
     description:
@@ -368,20 +367,20 @@ export class MapsController {
     description: 'Converte coordenadas geográficas em endereço legível',
   })
   @ApiQuery({ name: 'lat', description: 'Latitude', type: Number })
-  @ApiQuery({ name: 'lng', description: 'Longitude', type: Number })
+  @ApiQuery({ name: 'longitude', description: 'Longitude', type: Number })
   @ApiResponse({
     status: 200,
     description: 'Endereço obtido com sucesso',
     type: GeocodeResponse,
   })
   async reverseGeocode(
-    @Query('lat') latitude: string,
-    @Query('lng') longitude: string,
+    @Query('latitude') latitudeStr: string,
+    @Query('longitude') longitudeStr: string,
   ) {
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
+    const latitude = parseFloat(latitudeStr);
+    const longitude = parseFloat(longitudeStr);
 
-    if (isNaN(lat) || isNaN(lng)) {
+    if (isNaN(latitude) || isNaN(longitude)) {
       return {
         success: false,
         data: null,
@@ -390,15 +389,15 @@ export class MapsController {
     }
 
     try {
-      const address = await this.mapsService.reverseGeocode(lat, lng);
+      const address = await this.mapsService.reverseGeocode(latitude, longitude);
 
       return {
         success: true,
         data: {
           address,
           coordinates: {
-            latitude: lat,
-            longitude: lng,
+            latitude: latitude,
+            longitude: longitude,
           },
         },
         message: 'Endereço obtido com sucesso',
@@ -428,23 +427,23 @@ export class MapsController {
     description: 'Condições atuais retornadas',
   })
   async getRideConditions(
-    @Query('lat') latitude: string,
-    @Query('lng') longitude: string,
+    @Query('latitude') latitudeStr: string,
+    @Query('longitude') longitudeStr: string,
   ) {
     try {
-      const lat = parseFloat(latitude);
-      const lng = parseFloat(longitude);
+      const latitude = parseFloat(latitudeStr);
+      const longitude = parseFloat(longitudeStr);
 
-      if (isNaN(lat) || isNaN(lng)) {
+      if (isNaN(latitude) || isNaN(longitude)) {
         throw new BadRequestException('Coordenadas inválidas');
       }
 
       // Simular condições atuais - na implementação real,
       // consultaria dados reais de demanda e disponibilidade
       const conditions = {
-        location: { latitude: lat, longitude: lng },
+        location: { latitude: latitude, longitude: longitude },
         demandLevel: this.getDemandLevel(),
-        surgeMultiplier: this.calculateCurrentSurge(lat, lng),
+        surgeMultiplier: this.calculateCurrentSurge(latitude, longitude),
         availableDrivers: Math.floor(Math.random() * 50) + 10,
         averageWaitTime: Math.floor(Math.random() * 10) + 3,
         weather: {
@@ -635,7 +634,7 @@ export class MapsController {
     },
   })
   async calculateRouteOptimized(
-    @Body() calculateRouteDto: CalculateRouteNewDto,
+    @Body() calculateRouteDto: CalculateRouteDto,
   ) {
     try {
       const route = await this.mapsService.calculateRouteNew(calculateRouteDto);
@@ -655,7 +654,7 @@ export class MapsController {
     }
   }
 
-  private calculateCurrentSurge(lat: number, lng: number): number {
+  private calculateCurrentSurge(latitude: number, longitude: number): number {
     const hour = new Date().getHours();
     const isRushHour = (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
     const isWeekend = [0, 6].includes(new Date().getDay());
@@ -671,7 +670,7 @@ export class MapsController {
     }
 
     // Adicionar variação baseada em localização (simulada)
-    const locationFactor = Math.abs(Math.sin(lat) * Math.cos(lng)) * 0.3;
+    const locationFactor = Math.abs(Math.sin(latitude) * Math.cos(longitude)) * 0.3;
     surge += locationFactor;
 
     return Math.round(Math.min(surge, 2.5) * 10) / 10;

@@ -696,4 +696,5 @@ export class RidesController {
       };
     }
   }
+
 }

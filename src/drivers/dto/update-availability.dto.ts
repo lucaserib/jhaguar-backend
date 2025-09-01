@@ -1,22 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsBoolean, IsOptional, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
-
-class CurrentLocationDto {
-  @ApiProperty({
-    description: 'Latitude da localização atual',
-    example: -23.5505,
-  })
-  @IsOptional()
-  lat?: number;
-
-  @ApiProperty({
-    description: 'Longitude da localização atual',
-    example: -46.6333,
-  })
-  @IsOptional()
-  lng?: number;
-}
+import { CurrentLocationDto } from '../../common/dto/location.dto';
 
 export class UpdateAvailabilityDto {
   @ApiProperty({

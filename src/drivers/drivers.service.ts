@@ -14,7 +14,7 @@ import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
 import { LocationUpdateDto } from './dto/location-update.dto';
 import { UpdateAvailabilityDto } from './dto/update-availability.dto';
 import { DriverStatsResponseDto, StatsPeriod } from './dto/driver-stats.dto';
-import { RedisService } from './redis.service';
+import { RedisService } from '../common/redis/redis.service';
 
 @Injectable()
 export class DriversService {
@@ -379,8 +379,8 @@ export class DriversService {
 
     // Atualizar localização se fornecida
     if (updateData.currentLocation) {
-      updateFields.currentLatitude = updateData.currentLocation.lat;
-      updateFields.currentLongitude = updateData.currentLocation.lng;
+      updateFields.currentLatitude = updateData.currentLocation.latitude;
+      updateFields.currentLongitude = updateData.currentLocation.longitude;
       updateFields.lastLocationUpdate = new Date();
     }
 
@@ -401,8 +401,8 @@ export class DriversService {
     // Atualizar cache do Redis se localização foi fornecida
     if (updateData.currentLocation) {
       await this.updateLocationCache(driverId, {
-        latitude: updateData.currentLocation.lat,
-        longitude: updateData.currentLocation.lng,
+        latitude: updateData.currentLocation.latitude,
+        longitude: updateData.currentLocation.longitude,
         isOnline: updateData.isOnline,
         isAvailable: updateData.isAvailable,
         updatedAt: new Date(),

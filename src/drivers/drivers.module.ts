@@ -4,7 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { DriversService } from './drivers.service';
 import { DriversController } from './drivers.controller';
 import { DriverGateway } from './drivers.gateway';
-import { RedisService } from './redis.service';
+import { RedisModule } from '../common/redis/redis.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
@@ -12,6 +12,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
   imports: [
     PrismaModule,
     NotificationsModule,
+    RedisModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'your-secret-key',
       signOptions: { expiresIn: '24h' },
@@ -25,7 +26,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
   ],
   controllers: [DriversController],
-  providers: [DriversService, DriverGateway, RedisService],
-  exports: [DriversService, DriverGateway, RedisService],
+  providers: [DriversService, DriverGateway],
+  exports: [DriversService, DriverGateway],
 })
 export class DriversModule {}

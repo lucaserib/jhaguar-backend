@@ -1396,8 +1396,11 @@ export class RidesService {
             driverRating: updatedRide.driver?.averageRating,
             vehicle: updatedRide.driver?.vehicle,
             estimatedArrival: acceptData.estimatedPickupTime,
-          });
-          this.logger.log(`✅ WebSocket notification sent to passenger for ride ${rideId}`);
+            // CORREÇÃO: Incluir localização atual do driver
+            currentLatitude: acceptData.currentLocation.latitude,
+            currentLongitude: acceptData.currentLocation.longitude,
+          }, acceptData.estimatedPickupTime, updatedRide.finalPrice || 0); // CORREÇÃO: Incluir preço da corrida
+          this.logger.log(`✅ WebSocket notification sent to passenger for ride ${rideId} with price ${updatedRide.finalPrice}`);
         }
 
         // Também usar o serviço de notificações
@@ -1490,23 +1493,42 @@ export class RidesService {
         );
       }
 
-      const updatedRide = await this.prisma.ride.update({
-        where: { id: rideId },
-        data: {
-          status: 'ACCEPTED',
-        },
-      });
+      // CORREÇÃO: Manter status ACCEPTED e notificar apenas via WebSocket
+      // Não alterar status no banco para evitar problemas de compatibilidade
+      console.log(`🚗 Driver ${driverId} arrived at pickup location for ride ${rideId}`);
 
       await this.createRideStatusHistory(
         rideId,
         driverId,
         'ACCEPTED',
-        'DRIVER_ARRIVED',
+        'DRIVER_ARRIVED_EVENT', // Usar evento personalizado em vez de status
         {
-          latitude: arrivedData.currentLocation.lat,
-          longitude: arrivedData.currentLocation.lng,
+          latitude: arrivedData.currentLocation.latitude,
+          longitude: arrivedData.currentLocation.longitude,
         },
       );
+
+      // CORREÇÃO: Notificar passageiro via WebSocket com eventos específicos
+      this.logger.log(`🔍 Debug RideGateway availability: ${!!this.rideGateway}`);
+      if (this.rideGateway) {
+        this.logger.log(`📡 About to emit driver arrived events for ride ${rideId}`);
+        
+        // Emitir evento genérico de mudança de status
+        this.rideGateway.emitStatusUpdate(rideId, 'driver_arrived', {
+          latitude: arrivedData.currentLocation.latitude,
+          longitude: arrivedData.currentLocation.longitude,
+        });
+        
+        // Emitir evento específico de chegada do motorista
+        this.rideGateway.emitDriverArrived(rideId, {
+          latitude: arrivedData.currentLocation.latitude,
+          longitude: arrivedData.currentLocation.longitude,
+        });
+        
+        this.logger.log(`✅ WebSocket notifications sent: driver arrived for ride ${rideId}`);
+      } else {
+        this.logger.error(`❌ RideGateway not available for ride ${rideId}!`);
+      }
 
       this.logger.log(
         `Driver ${driverId} arrived at pickup location for ride ${rideId}`,
@@ -1539,7 +1561,7 @@ export class RidesService {
         where: {
           id: rideId,
           driverId,
-          status: RideStatus.ACCEPTED,
+          status: RideStatus.ACCEPTED, // CORREÇÃO: Usar apenas ACCEPTED status
         },
       });
 
@@ -1553,29 +1575,34 @@ export class RidesService {
         where: { id: rideId },
         data: {
           status: RideStatus.IN_PROGRESS,
-          pickupTime: startData.startedAt,
+          pickupTime: new Date(startData.startedAt), // CORREÇÃO: Converter string ISO 8601 para Date
         },
       });
 
       await this.createRideStatusHistory(
         rideId,
         driverId,
-        'ACCEPTED',
+        ride.status, // CORREÇÃO: Usar status atual da corrida (ACCEPTED ou DRIVER_ARRIVED)
         'IN_PROGRESS',
         {
-          latitude: startData.currentLocation.lat,
-          longitude: startData.currentLocation.lng,
+          latitude: startData.currentLocation.latitude,
+          longitude: startData.currentLocation.longitude,
         },
       );
 
-      // Notify passenger via WebSocket
-      this.rideGateway.emitToRide(rideId, 'ride:started', {
-        rideId,
-        status: 'in_progress',
-        message: 'Viagem iniciada! Boa viagem!',
-        startedAt: startData.startedAt,
-        route: startData.route,
-      });
+      // CORREÇÃO: Notify passenger via WebSocket com eventos específicos
+      if (this.rideGateway) {
+        // Emitir evento genérico de mudança de status
+        this.rideGateway.emitStatusUpdate(rideId, 'in_progress', {
+          latitude: startData.currentLocation.latitude,
+          longitude: startData.currentLocation.longitude,
+        });
+        
+        // Emitir evento específico de início de viagem
+        this.rideGateway.emitRideStarted(rideId, startData.route);
+        
+        this.logger.log(`✅ WebSocket notifications sent: ride started for ${rideId}`);
+      }
 
       this.logger.log(`Ride ${rideId} started by driver ${driverId}`);
 
@@ -1661,19 +1688,25 @@ export class RidesService {
 
       const driverEarnings = (ride.finalPrice || 0) * 0.9;
 
-      // Notify passenger via WebSocket
-      this.rideGateway.emitToRide(rideId, 'ride:completed', {
-        rideId,
-        status: 'completed',
-        message: 'Viagem concluída! Obrigado por usar o JhaguarClean',
-        completedAt: completeData.completedAt,
-        finalPrice: ride.finalPrice,
-        summary: {
+      // CORREÇÃO: Notify passenger via WebSocket com eventos específicos
+      if (this.rideGateway) {
+        // Emitir evento genérico de mudança de status
+        this.rideGateway.emitStatusUpdate(rideId, 'completed', {
+          latitude: completeData.finalLocation.latitude,
+          longitude: completeData.finalLocation.longitude,
+        });
+        
+        // Emitir evento específico de corrida completada
+        this.rideGateway.emitRideCompleted(rideId, {
           distance: completeData.actualDistance,
           duration: completeData.actualDuration,
           finalLocation: completeData.finalLocation,
-        },
-      });
+          finalPrice: ride.finalPrice,
+          earnings: driverEarnings,
+        });
+        
+        this.logger.log(`✅ WebSocket notifications sent: ride completed for ${rideId}`);
+      }
 
       this.logger.log(
         `Ride ${rideId} completed by driver ${driverId}. Earnings: ${driverEarnings}`,
@@ -2436,6 +2469,90 @@ export class RidesService {
           oldestRideAge: null,
         },
         message: `Erro na limpeza: ${error.message}`,
+      };
+    }
+  }
+
+  async getUserRideHistory(userId: string) {
+    try {
+      // Buscar passageiro do usuário
+      const passenger = await this.prisma.passenger.findFirst({
+        where: { userId }
+      });
+
+      if (!passenger) {
+        return {
+          success: true,
+          data: [],
+          message: 'Nenhuma corrida encontrada'
+        };
+      }
+
+      // Buscar corridas do passageiro (completas e canceladas recentes)
+      const rides = await this.prisma.ride.findMany({
+        where: {
+          passengerId: passenger.id,
+          status: {
+            in: ['COMPLETED', 'CANCELLED']
+          }
+        },
+        include: {
+          driver: {
+            include: {
+              user: true,
+              vehicle: true
+            }
+          },
+          passenger: {
+            include: {
+              user: true
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        take: 20 // Últimas 20 corridas
+      });
+
+      // Formatar dados no formato esperado pelo frontend
+      const formattedRides = rides.map(ride => ({
+        ride_id: ride.id,
+        origin_address: ride.originAddress,
+        destination_address: ride.destinationAddress,
+        origin_latitude: ride.originLatitude,
+        origin_longitude: ride.originLongitude,
+        destination_latitude: ride.destinationLatitude,
+        destination_longitude: ride.destinationLongitude,
+        ride_time: ride.actualDuration ? Math.round(ride.actualDuration / 60) : 0, // minutos
+        fare_price: ride.finalPrice || 0,
+        payment_status: ride.status === 'COMPLETED' ? 'paid' : 'cancelled',
+        driver_id: ride.driver ? Number(ride.driver.id) : 0,
+        user_id: userId,
+        created_at: ride.createdAt.toISOString(),
+        driver: ride.driver ? {
+          first_name: ride.driver.user?.firstName || 'Motorista',
+          last_name: ride.driver.user?.lastName || '',
+          car_seats: ride.driver.vehicle?.capacity || 4,
+        } : {
+          first_name: 'Motorista',
+          last_name: 'Indisponível',
+          car_seats: 4,
+        }
+      }));
+
+      return {
+        success: true,
+        data: formattedRides,
+        message: `${formattedRides.length} corridas encontradas`
+      };
+
+    } catch (error) {
+      this.logger.error(`❌ Erro ao buscar histórico de corridas: ${error.message}`, error.stack);
+      return {
+        success: false,
+        data: [],
+        message: `Erro ao buscar corridas: ${error.message}`
       };
     }
   }

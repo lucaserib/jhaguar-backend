@@ -1,20 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, ValidateNested, IsOptional } from 'class-validator';
+import { IsDateString, ValidateNested, IsOptional, IsNotEmpty } from 'class-validator';
 import { Type } from 'class-transformer';
-
-class CurrentLocationDto {
-  @ApiProperty({
-    description: 'Latitude da localização atual',
-    example: -23.5505,
-  })
-  lat: number;
-
-  @ApiProperty({
-    description: 'Longitude da localização atual',
-    example: -46.6333,
-  })
-  lng: number;
-}
+import { LocationDto } from '../../common/dto/location.dto';
 
 class RouteInfoDto {
   @ApiProperty({
@@ -41,16 +28,17 @@ export class StartRideDto {
     description: 'Data e hora do início da corrida',
     example: '2024-08-06T18:20:00.000Z',
   })
-  @IsDateString()
-  startedAt: Date;
+  @IsNotEmpty({ message: 'startedAt is required' })
+  @IsDateString({}, { message: 'startedAt must be a valid ISO 8601 date string' })
+  startedAt: string; // CORREÇÃO: Simplificar - deixar apenas IsDateString fazer a validação
 
   @ApiProperty({
     description: 'Localização atual do motorista',
-    type: CurrentLocationDto,
+    type: LocationDto,
   })
   @ValidateNested()
-  @Type(() => CurrentLocationDto)
-  currentLocation: CurrentLocationDto;
+  @Type(() => LocationDto)
+  currentLocation: LocationDto;
 
   @ApiProperty({
     description: 'Informações da rota calculada',

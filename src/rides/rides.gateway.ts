@@ -21,7 +21,9 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     { socketId: string; userId: string; userType: 'driver' | 'passenger' }
   >();
   private readonly logger = new Logger(RideGateway.name);
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(private readonly jwtService: JwtService) {
+    this.logger.log('🚀 RideGateway instantiated successfully');
+  }
 
   handleConnection(client: Socket) {
     const userId = this.extractUserId(client);
@@ -74,17 +76,23 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { rideId: string; userType: 'driver' | 'passenger' },
   ) {
+    const room = `ride:${data.rideId}`;
     this.logger.log(
-      `User joining ride room: ${data.rideId}, type: ${data.userType}`,
+      `🔌 User ${client.id} (${data.userType}) joining ride room: ${room}`,
     );
-    client.join(`ride:${data.rideId}`);
+    client.join(room);
+
+    // Verificar quantos estão conectados agora
+    const connectedSockets = this.server.sockets.adapter.rooms.get(room);
+    const socketCount = connectedSockets ? connectedSockets.size : 0;
+    this.logger.log(`✅ User joined room ${room}. Total connected: ${socketCount} sockets`);
 
     const userData = this.connectedUsers.get(client.id);
     if (userData) {
       userData.userType = data.userType;
     }
 
-    client.to(`ride:${data.rideId}`).emit('ride:user-joined', {
+    client.to(room).emit('ride:user-joined', {
       userType: data.userType,
       timestamp: new Date(),
     });
@@ -148,11 +156,22 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   emitToRide(rideId: string, event: string, data: any) {
-    this.logger.log(`Emitting ${event} to ride ${rideId}`);
-    this.server.to(`ride:${rideId}`).emit(event, {
+    const room = `ride:${rideId}`;
+    const connectedSockets = this.server.sockets.adapter.rooms.get(room);
+    const socketCount = connectedSockets ? connectedSockets.size : 0;
+    
+    this.logger.log(`📡 Emitting ${event} to ride ${rideId} | Room: ${room} | Connected: ${socketCount} sockets`);
+    
+    if (socketCount === 0) {
+      this.logger.warn(`⚠️ No sockets connected to room ${room}! Event ${event} will not be received.`);
+    }
+    
+    this.server.to(room).emit(event, {
       ...data,
       timestamp: new Date(),
     });
+    
+    this.logger.log(`✅ Event ${event} emitted to ${socketCount} sockets in room ${room}`);
   }
 
   emitRideStatusChanged(
@@ -169,11 +188,33 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  emitRideAccepted(rideId: string, driverInfo: any, estimatedArrival?: number) {
+  emitStatusUpdate(
+    rideId: string,
+    status: string,
+    location?: { latitude: number; longitude: number },
+    metadata?: any,
+  ) {
+    // CORREÇÃO: Método genérico para updates de status
+    this.logger.log(`📡 Emitting status update: ${status} for ride ${rideId}`);
+    this.emitToRide(rideId, 'ride:status-changed', {
+      rideId,
+      status,
+      location,
+      metadata,
+    });
+    
+    // Emitir também evento específico baseado no status
+    if (status === 'driver_arrived') {
+      this.emitDriverArrived(rideId, location || { latitude: 0, longitude: 0 });
+    }
+  }
+
+  emitRideAccepted(rideId: string, driverInfo: any, estimatedArrival?: number, ridePrice?: number) {
     this.emitToRide(rideId, 'ride:accepted', {
       rideId,
       driver: driverInfo,
       estimatedArrival,
+      finalPrice: ridePrice, // CORREÇÃO: Incluir preço da corrida
     });
   }
 

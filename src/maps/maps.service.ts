@@ -4,9 +4,9 @@ import { ConfigService } from '@nestjs/config';
 import { RideTypesService } from '../ride-types/ride-types.service';
 import { NearbyDriversDto, NearbyDriver } from './dto/nearby-drivers.dto';
 import {
-  CalculateRouteNewDto,
+  CalculateRouteDto,
   RouteResponseDto,
-} from './dto/calculate-route-new.dto';
+} from './dto/calculate-route.dto';
 import { CalculatePriceDto } from './dto/calculate-price.dto';
 import {
   Location,
@@ -24,6 +24,7 @@ import {
   SmartRideRecommendation,
 } from './interfaces/maps.interfaces';
 import { RideTypeEnum, Gender, VehicleType } from '@prisma/client';
+import { calculateHaversineDistance } from '../common/utils/math.utils';
 
 interface RideConfirmationData {
   origin: Location & { address: string };
@@ -130,7 +131,7 @@ export class MapsService {
   }
 
   async calculateRouteNew(
-    data: CalculateRouteNewDto,
+    data: CalculateRouteDto,
   ): Promise<RouteResponseDto> {
     try {
       this.logger.log(
@@ -281,14 +282,14 @@ export class MapsService {
   }
 
   private async calculateOptimizedRoute(
-    data: CalculateRouteNewDto,
+    data: CalculateRouteDto,
   ): Promise<RouteResponseDto> {
     // Implementação simplificada - na produção usaria Google Routes API
-    const distance = this.calculateHaversineDistance(
-      data.origin.lat,
-      data.origin.lng,
-      data.destination.lat,
-      data.destination.lng,
+    const distance = calculateHaversineDistance(
+      data.origin.latitude,
+      data.origin.longitude,
+      data.destination.latitude,
+      data.destination.longitude,
     );
 
     const duration = Math.round((distance / 250) * 60); // ~15 km/h na cidade
@@ -308,39 +309,17 @@ export class MapsService {
       ],
       bounds: {
         northeast: {
-          lat: Math.max(data.origin.lat, data.destination.lat),
-          lng: Math.max(data.origin.lng, data.destination.lng),
+          latitude: Math.max(data.origin.latitude, data.destination.latitude),
+          longitude: Math.max(data.origin.longitude, data.destination.longitude),
         },
         southwest: {
-          lat: Math.min(data.origin.lat, data.destination.lat),
-          lng: Math.min(data.origin.lng, data.destination.lng),
+          latitude: Math.min(data.origin.latitude, data.destination.latitude),
+          longitude: Math.min(data.origin.longitude, data.destination.longitude),
         },
       },
     };
   }
 
-  private calculateHaversineDistance(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ): number {
-    const R = 6371; // Raio da Terra em km
-    const dLat = this.degToRad(lat2 - lat1);
-    const dLng = this.degToRad(lng2 - lng1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.degToRad(lat1)) *
-        Math.cos(this.degToRad(lat2)) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c; // Distância em km
-  }
-
-  private degToRad(deg: number): number {
-    return deg * (Math.PI / 180);
-  }
 
   async getSmartRideRecommendations(
     userId: string,
@@ -999,7 +978,7 @@ export class MapsService {
       const nearbyDrivers: DriverWithDistance[] = [];
 
       for (const driver of driversWithCoords) {
-        const distance = this.calculateDistance(
+        const distance = calculateHaversineDistance(
           latitude,
           longitude,
           driver.currentLatitude!,
@@ -1154,7 +1133,7 @@ export class MapsService {
         const nearbyDrivers: DriverWithDistance[] = [];
 
         for (const driver of drivers) {
-          const distance = this.calculateDistance(
+          const distance = calculateHaversineDistance(
             latitude,
             longitude,
             driver.currentLatitude!,
@@ -1228,7 +1207,7 @@ export class MapsService {
     } catch (error) {
       this.logger.error('Erro ao calcular rota:', error);
       const distance =
-        this.calculateDistance(
+        calculateHaversineDistance(
           origin.latitude,
           origin.longitude,
           destination.latitude,
@@ -1404,28 +1383,6 @@ export class MapsService {
     }
   }
 
-  private calculateDistance(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number,
-  ): number {
-    const R = 6371;
-    const dLat = this.deg2rad(lat2 - lat1);
-    const dLon = this.deg2rad(lon2 - lon1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.deg2rad(lat1)) *
-        Math.cos(this.deg2rad(lat2)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private deg2rad(deg: number): number {
-    return deg * (Math.PI / 180);
-  }
 
   private async calculateRouteWithRoutesAPI(
     origin: Location,
@@ -1437,7 +1394,7 @@ export class MapsService {
         'Google API Key não configurada, usando cálculo estimado',
       );
       const distance =
-        this.calculateDistance(
+        calculateHaversineDistance(
           origin.latitude,
           origin.longitude,
           destination.latitude,
