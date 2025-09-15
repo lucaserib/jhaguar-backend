@@ -380,13 +380,16 @@ export class RidesService {
           this.confirmationTokens.delete(createRideDto.confirmationToken!);
         }
 
-        // NOVO: Criar registro de pagamento inicial
+        // NOVO: Criar registro de pagamento inicial com método selecionado
+        const paymentMethod = createRideDto.paymentMethod || 'CASH';
+        console.log(`💳 Criando pagamento com método: ${paymentMethod}`);
+        
         await this.prisma.payment.create({
           data: {
             rideId: ride.id,
             amount: finalPricing.finalPrice,
             status: PaymentStatus.PENDING,
-            method: PaymentMethod.CASH, // Valor padrão, será atualizado quando o usuário escolher
+            method: paymentMethod as PaymentMethod,
           },
         });
 
@@ -422,9 +425,11 @@ export class RidesService {
       };
 
       if (idempotencyKey) {
+        // PRODUÇÃO: TTL de 3 minutos - adequado para conexões móveis com retry automático
+        const idempotencyTTL = 3 * 60 * 1000; // 3 minutos
         return await this.idempotency.getOrSet(
           `rides:create:${userId}:${idempotencyKey}`,
-          10 * 60 * 1000,
+          idempotencyTTL,
           exec,
         );
       }
@@ -713,6 +718,43 @@ export class RidesService {
         },
       });
 
+      // NOVO: Automatic wallet balance transfer for WALLET_BALANCE payments
+      if (ride.payment && ride.payment.method === 'WALLET_BALANCE' && ride.payment.status !== 'PAID' && ride.driver && ride.finalPrice) {
+        try {
+          this.logger.log(
+            `🚀 Automatically processing wallet payment for completed ride ${ride.id}`,
+          );
+
+          const paymentResult = await this.paymentsService.processAutomaticWalletPayment(
+            ride.id,
+            ride.passenger.userId,
+            ride.driver.userId,
+            ride.finalPrice,
+          );
+
+          if (paymentResult.success) {
+            this.logger.log(
+              `✅ Wallet payment processed successfully for ride ${ride.id}: R$ ${ride.finalPrice} (net: R$ ${paymentResult.data.netAmount}, fee: R$ ${paymentResult.data.platformFee})`,
+            );
+          } else {
+            this.logger.error(
+              `❌ Failed to process wallet payment for ride ${ride.id}: ${paymentResult.message}`,
+            );
+            // Don't fail the ride completion, just log the error
+          }
+        } catch (paymentError) {
+          this.logger.error(
+            `❌ Error processing automatic wallet payment for ride ${ride.id}:`,
+            paymentError,
+          );
+          // Don't fail the ride completion, just log the error
+        }
+      } else if (ride.payment && ride.payment.method === 'WALLET_BALANCE' && (!ride.driver || !ride.finalPrice)) {
+        this.logger.warn(
+          `⚠️ Cannot process automatic wallet payment for ride ${ride.id}: missing driver (${!!ride.driver}) or finalPrice (${!!ride.finalPrice})`,
+        );
+      }
+
       // Disponibilizar motorista novamente
       await this.prisma.driver.update({
         where: { id: driverId },
@@ -722,17 +764,30 @@ export class RidesService {
         },
       });
 
+      // PRODUÇÃO: Limpar cache de idempotência para permitir novas corridas
+      try {
+        await this.idempotency.deleteByPattern(`rides:create:${ride.passenger.userId}:*`);
+        this.logger.log(`🧹 Cache de idempotência limpo para usuário ${ride.passenger.userId}`);
+      } catch (error) {
+        this.logger.warn(`⚠️ Falha ao limpar cache de idempotência: ${error.message}`);
+      }
+
+      // Get updated payment status after automatic processing
+      const updatedPayment = await this.prisma.payment.findUnique({
+        where: { rideId: ride.id },
+      });
+
       // NOVO: Preparar informações de pagamento
       const paymentInfo = {
         rideId: ride.id,
         amount: ride.finalPrice,
         currency: 'BRL',
-        currentStatus: ride.payment?.status || PaymentStatus.PENDING,
-        requiresPayment:
-          !ride.payment || ride.payment.status === PaymentStatus.PENDING,
+        currentStatus: updatedPayment?.status || PaymentStatus.PENDING,
+        requiresPayment: !updatedPayment || updatedPayment.status === PaymentStatus.PENDING,
         availableMethods: await this.paymentsService.getPaymentMethods(
           ride.passenger.userId,
         ),
+        automaticallyProcessed: updatedPayment?.method === 'WALLET_BALANCE' && updatedPayment?.status === 'PAID',
       };
 
       return {
@@ -745,10 +800,27 @@ export class RidesService {
           finalDuration: updatedRide.actualDuration,
           payment: paymentInfo,
         },
-        message: 'Corrida finalizada com sucesso',
+        message: updatedPayment?.method === 'WALLET_BALANCE' && updatedPayment?.status === 'PAID'
+          ? 'Ride completed and wallet payment processed automatically'
+          : 'Corrida finalizada com sucesso',
       };
     } catch (error) {
       this.logger.error('Erro ao finalizar corrida:', error);
+      
+      // PRODUÇÃO: Garantir que motorista seja marcado como disponível mesmo em caso de erro
+      try {
+        await this.prisma.driver.update({
+          where: { id: driverId },
+          data: {
+            isAvailable: true,
+            isActiveTrip: false,
+          },
+        });
+        this.logger.log(`✅ Motorista ${driverId} marcado como disponível após erro`);
+      } catch (driverError) {
+        this.logger.error(`❌ Falha crítica ao disponibilizar motorista ${driverId}:`, driverError);
+      }
+
       return {
         success: false,
         data: null,
@@ -1525,6 +1597,17 @@ export class RidesService {
           longitude: arrivedData.currentLocation.longitude,
         });
         
+        // CORREÇÃO: Emitir também eventos adicionais para máxima compatibilidade
+        this.rideGateway.emitToRide(rideId, 'ride:status-changed', {
+          rideId,
+          status: 'driver_arrived',
+          location: {
+            latitude: arrivedData.currentLocation.latitude,
+            longitude: arrivedData.currentLocation.longitude,
+          },
+          timestamp: new Date().toISOString(),
+        });
+        
         this.logger.log(`✅ WebSocket notifications sent: driver arrived for ride ${rideId}`);
       } else {
         this.logger.error(`❌ RideGateway not available for ride ${rideId}!`);
@@ -1561,7 +1644,7 @@ export class RidesService {
         where: {
           id: rideId,
           driverId,
-          status: RideStatus.ACCEPTED, // CORREÇÃO: Usar apenas ACCEPTED status
+          status: RideStatus.ACCEPTED, // CORREÇÃO: Usar apenas status válido do Prisma
         },
       });
 
@@ -1600,6 +1683,17 @@ export class RidesService {
         
         // Emitir evento específico de início de viagem
         this.rideGateway.emitRideStarted(rideId, startData.route);
+        
+        // CORREÇÃO: Emitir também eventos adicionais para máxima compatibilidade
+        this.rideGateway.emitToRide(rideId, 'ride:status-changed', {
+          rideId,
+          status: 'in_progress',
+          location: {
+            latitude: startData.currentLocation.latitude,
+            longitude: startData.currentLocation.longitude,
+          },
+          timestamp: new Date().toISOString(),
+        });
         
         this.logger.log(`✅ WebSocket notifications sent: ride started for ${rideId}`);
       }
