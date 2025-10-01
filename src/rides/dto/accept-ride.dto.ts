@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNumber, Min, Max, IsOptional, ValidateNested } from 'class-validator';
+import {
+  IsNumber,
+  Min,
+  Max,
+  IsOptional,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 class LocationDto {
@@ -28,7 +34,8 @@ class LocationDto {
 
 export class AcceptRideDto {
   @ApiProperty({
-    description: 'Tempo estimado para chegada no ponto de embarque (em minutos)',
+    description:
+      'Tempo estimado para chegada no ponto de embarque (em minutos)',
     example: 8,
     required: false,
   })

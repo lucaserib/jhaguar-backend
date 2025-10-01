@@ -262,7 +262,7 @@ export class FeeManagementController {
         'prisma'
       ].driver.findUnique({
         where: { id: driverId },
-        include: { user: true },
+        include: { User: true },
       });
 
       if (!driver) {
@@ -278,8 +278,7 @@ export class FeeManagementController {
             status: 'PENDING',
             amount: { lt: 0 },
           },
-          include: {
-            ride: {
+          include: { Ride: {
               select: {
                 id: true,
                 originAddress: true,
@@ -338,7 +337,7 @@ export class FeeManagementController {
         success: true,
         data: {
           driverId,
-          driverName: `${driver.user.firstName} ${driver.user.lastName}`,
+          driverName: `${driver.User.firstName} ${driver.User.lastName}`,
           currentBalance: walletBalance.balance,
 
           pending: {
@@ -353,13 +352,13 @@ export class FeeManagementController {
               amount: Math.abs(fee.amount),
               description: fee.description,
               createdAt: fee.createdAt,
-              rideDetails: fee.ride
+              rideDetails: fee.Ride
                 ? {
-                    rideId: fee.ride.id,
-                    origin: fee.ride.originAddress,
-                    destination: fee.ride.destinationAddress,
-                    date: fee.ride.createdAt,
-                    amount: fee.ride.finalPrice,
+                    rideId: fee.Ride.id,
+                    origin: fee.Ride.originAddress,
+                    destination: fee.Ride.destinationAddress,
+                    date: fee.Ride.createdAt,
+                    amount: fee.Ride.finalPrice,
                   }
                 : null,
             })),

@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsNumber, IsOptional, ValidateNested, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsNumber,
+  IsOptional,
+  ValidateNested,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 class FinalLocationDto {
@@ -24,7 +30,7 @@ export class CompleteRideDto {
     example: '2024-08-06T18:30:00.000Z',
   })
   @IsDateString()
-  completedAt: Date;
+  completedAt: string;
 
   @ApiProperty({
     description: 'Localização final onde a corrida foi finalizada',

@@ -56,8 +56,7 @@ export class DriversService {
           licenseExpiryDate: new Date(createDriverDto.licenseExpiryDate),
           bankAccount: createDriverDto.bankAccount,
         },
-        include: {
-          user: {
+        include: { User: {
             select: {
               firstName: true,
               lastName: true,
@@ -78,8 +77,7 @@ export class DriversService {
         accountStatus: Status.PENDING,
         backgroundCheckStatus: Status.PENDING,
       },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -99,8 +97,7 @@ export class DriversService {
 
   async findAll() {
     return this.prisma.driver.findMany({
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -109,7 +106,7 @@ export class DriversService {
             profileImage: true,
           },
         },
-        vehicle: true,
+        Vehicle: true,
       },
     });
   }
@@ -117,8 +114,7 @@ export class DriversService {
   async findOne(id: string) {
     const driver = await this.prisma.driver.findUnique({
       where: { id },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -127,7 +123,7 @@ export class DriversService {
             profileImage: true,
           },
         },
-        vehicle: true,
+        Vehicle: true,
       },
     });
 
@@ -141,8 +137,7 @@ export class DriversService {
   async findByUserId(userId: string) {
     const driver = await this.prisma.driver.findUnique({
       where: { userId },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -151,7 +146,7 @@ export class DriversService {
             profileImage: true,
           },
         },
-        vehicle: true,
+        Vehicle: true,
       },
     });
 
@@ -165,8 +160,7 @@ export class DriversService {
   async updateStatus(id: string, status: Status) {
     const driver = await this.prisma.driver.findUnique({
       where: { id },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -183,8 +177,7 @@ export class DriversService {
     const updatedDriver = await this.prisma.driver.update({
       where: { id },
       data: { accountStatus: status },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -203,7 +196,7 @@ export class DriversService {
       id: updatedDriver.id,
       userId: updatedDriver.userId,
       status: updatedDriver.accountStatus,
-      user: updatedDriver.user,
+      user: updatedDriver.User,
       message: `Status do motorista atualizado para ${status}`,
     };
   }
@@ -248,8 +241,7 @@ export class DriversService {
         isAvailable: updateLocationDto.isAvailable ?? driver.isAvailable,
         isOnline: updateLocationDto.isOnline ?? driver.isOnline,
       },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -258,7 +250,7 @@ export class DriversService {
             profileImage: true,
           },
         },
-        vehicle: true,
+        Vehicle: true,
       },
     });
 
@@ -268,8 +260,8 @@ export class DriversService {
       longitude: updatedDriver.currentLongitude,
       isAvailable: updatedDriver.isAvailable,
       isOnline: updatedDriver.isOnline,
-      user: updatedDriver.user,
-      vehicle: updatedDriver.vehicle,
+      user: updatedDriver.User,
+      vehicle: updatedDriver.Vehicle,
     };
   }
 
@@ -281,8 +273,7 @@ export class DriversService {
         currentLatitude: { not: null },
         currentLongitude: { not: null },
       },
-      include: {
-        user: {
+      include: { User: {
           select: {
             firstName: true,
             lastName: true,
@@ -291,7 +282,7 @@ export class DriversService {
             profileImage: true,
           },
         },
-        vehicle: true,
+        Vehicle: true,
       },
     });
   }
@@ -326,7 +317,7 @@ export class DriversService {
   async updateDriverStatus(driverId: string, status: Status) {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: { user: true },
+      include: { User: true },
     });
 
     if (!driver) {
@@ -340,7 +331,7 @@ export class DriversService {
       data: {
         accountStatus: status,
       },
-      include: { user: true },
+      include: { User: true },
     });
 
     // Log de auditoria
@@ -514,8 +505,8 @@ export class DriversService {
         },
       },
       include: {
-        ratings: true,
-        payment: true,
+        Rating: true,
+        Payment: true,
       },
     });
 
@@ -532,7 +523,7 @@ export class DriversService {
       0,
     );
 
-    const ratings = rides.flatMap((ride) => ride.ratings);
+    const ratings = rides.flatMap((ride) => ride.Rating);
     const avgRating =
       ratings.length > 0
         ? ratings.reduce((sum, rating) => sum + rating.rating, 0) /
@@ -555,7 +546,7 @@ export class DriversService {
         cancelled: cancelledRides.length,
         acceptance_rate: acceptanceRate,
       },
-      ratings: {
+      Rating: {
         average: avgRating,
         count: ratings.length,
       },
@@ -669,7 +660,7 @@ export class DriversService {
           isAvailable: true,
           accountStatus: 'APPROVED',
         },
-        include: { user: true, vehicle: true },
+        include: { User: true, Vehicle: true },
       });
 
       if (!driver) {
@@ -685,8 +676,7 @@ export class DriversService {
           status: RideStatus.REQUESTED,
           driverId: null, // Ainda não foi aceita por ninguém
         },
-        include: {
-          passenger: { include: { user: true } },
+        include: { Passenger: { include: { User: true } },
           RideTypeConfig: true,
         },
       });
@@ -698,47 +688,52 @@ export class DriversService {
       }
 
       // Atualizar a corrida e o motorista em uma transação
-      const result = await this.prisma.$transaction(async (tx) => {
-        // Aceitar a corrida
-        const updatedRide = await tx.ride.update({
-          where: { id: rideId },
-          data: {
-            driverId,
-            vehicleId: driver.vehicle?.id,
-            status: RideStatus.ACCEPTED,
-            acceptTime: new Date(),
-          },
-          include: {
-            passenger: { include: { user: true } },
-            driver: { include: { user: true, vehicle: true } },
-            RideTypeConfig: true,
-          },
-        });
+      const result = await this.prisma.$transaction(
+        async (tx) => {
+          // Aceitar a corrida
+          const updatedRide = await tx.ride.update({
+            where: { id: rideId },
+            data: {
+              driverId,
+              vehicleId: driver.Vehicle ?.id,
+              status: RideStatus.ACCEPTED,
+              acceptTime: new Date(),
+            },
+            include: { Passenger: { include: { User: true } },
+              Driver: { include: { User: true, Vehicle: true } },
+              RideTypeConfig: true,
+            },
+          });
 
-        // Marcar motorista como ocupado
-        await tx.driver.update({
-          where: { id: driverId },
-          data: {
-            isAvailable: false,
-            isActiveTrip: true,
-          },
-        });
+          // Marcar motorista como ocupado
+          await tx.driver.update({
+            where: { id: driverId },
+            data: {
+              isAvailable: false,
+              isActiveTrip: true,
+            },
+          });
 
-        // Criar histórico de status
-        await tx.rideStatusHistory.create({
-          data: {
-            rideId,
-            driverId,
-            previousStatus: 'REQUESTED',
-            newStatus: 'ACCEPTED',
-            locationLatitude: acceptData.currentLocation.latitude,
-            locationLongitude: acceptData.currentLocation.longitude,
-            notes: `Aceita pelo motorista ${driver.user.firstName}`,
-          },
-        });
+          // Criar histórico de status
+          await tx.rideStatusHistory.create({
+            data: {
+              rideId,
+              driverId,
+              previousStatus: 'REQUESTED',
+              newStatus: 'ACCEPTED',
+              locationLatitude: acceptData.currentLocation.latitude,
+              locationLongitude: acceptData.currentLocation.longitude,
+              notes: `Aceita pelo motorista ${driver.User.firstName}`,
+            },
+          });
 
-        return updatedRide;
-      });
+          return updatedRide;
+        },
+        {
+          timeout: 10000, // Quick ride acceptance
+          isolationLevel: 'ReadCommitted',
+        },
+      );
 
       this.logger.log(
         `✅ Ride ${rideId} successfully accepted by driver ${driverId}`,
@@ -751,16 +746,15 @@ export class DriversService {
           status: 'accepted',
           acceptedAt: result.acceptTime,
           estimatedPickupTime: acceptData.estimatedPickupTime,
-          driver: {
+          Driver: {
             id: driver.id,
-            name: `${driver.user.firstName} ${driver.user.lastName}`,
-            phone: driver.user.phone,
+            name: `${driver.User.firstName} ${driver.User.lastName}`,
+            phone: driver.User.phone,
             rating: driver.averageRating,
-            vehicle: driver.vehicle
-              ? {
-                  model: driver.vehicle.model,
-                  color: driver.vehicle.color,
-                  licensePlate: driver.vehicle.licensePlate,
+            vehicle: driver.Vehicle ? {
+                  model: driver.Vehicle.model,
+                  color: driver.Vehicle.color,
+                  licensePlate: driver.Vehicle.licensePlate,
                 }
               : null,
           },
@@ -774,6 +768,73 @@ export class DriversService {
         data: null,
         message:
           error instanceof Error ? error.message : 'Erro ao aceitar corrida',
+      };
+    }
+  }
+
+  async debugOnlineStatus() {
+    try {
+      // Buscar todos os motoristas com informações relevantes
+      const allDrivers = await this.prisma.driver.findMany({
+        include: { User: {
+            select: {
+              firstName: true,
+              lastName: true,
+            },
+          },
+          DriverRideType: {
+            where: { isActive: true },
+            include: { RideTypeConfig: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Calcular estatísticas
+      const totalDrivers = allDrivers.length;
+      const onlineDrivers = allDrivers.filter((d) => d.isOnline).length;
+      const availableDrivers = allDrivers.filter((d) => d.isOnline && d.isAvailable).length;
+      const approvedDrivers = allDrivers.filter((d) => d.accountStatus === 'APPROVED').length;
+
+      // Mapear dados detalhados dos motoristas
+      const driversData = allDrivers.map((driver) => ({
+        id: driver.id,
+        name: `${driver.User?.firstName || 'N/A'} ${driver.User?.lastName || ''}`,
+        isOnline: driver.isOnline,
+        isAvailable: driver.isAvailable,
+        accountStatus: driver.accountStatus,
+        hasLocation: !!(driver.currentLatitude && driver.currentLongitude),
+        location: driver.currentLatitude && driver.currentLongitude
+          ? [driver.currentLatitude, driver.currentLongitude]
+          : null,
+        rideTypes: driver.DriverRideType.map((rt) => rt.RideTypeConfig.name),
+      }));
+
+      this.logger.log(`📊 Debug Online Status: ${onlineDrivers}/${totalDrivers} motoristas online`);
+
+      return {
+        success: true,
+        data: {
+          totalDrivers,
+          onlineDrivers,
+          availableDrivers,
+          approvedDrivers,
+          onlineAndAvailable: availableDrivers,
+          drivers: driversData,
+          timestamp: new Date(),
+        },
+        message: `${onlineDrivers} de ${totalDrivers} motoristas estão online (${availableDrivers} disponíveis)`,
+      };
+    } catch (error) {
+      this.logger.error('Erro ao buscar status de motoristas:', error);
+      return {
+        success: false,
+        data: null,
+        message: error instanceof Error ? error.message : 'Erro interno',
       };
     }
   }

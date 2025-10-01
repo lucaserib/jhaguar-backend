@@ -13,7 +13,13 @@ export class NotifyPassengerDto {
   @ApiProperty({
     description: 'Tipo da notificação',
     example: 'DRIVER_ARRIVED',
-    enum: ['DRIVER_ARRIVED', 'RIDE_STARTED', 'RIDE_COMPLETED', 'DRIVER_DELAYED', 'CUSTOM'],
+    enum: [
+      'DRIVER_ARRIVED',
+      'RIDE_STARTED',
+      'RIDE_COMPLETED',
+      'DRIVER_DELAYED',
+      'CUSTOM',
+    ],
   })
   @IsString()
   @IsNotEmpty()

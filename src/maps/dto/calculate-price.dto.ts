@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  IsString,
   IsNumber,
   IsOptional,
   IsEnum,
@@ -17,6 +18,13 @@ enum VehicleType {
 }
 
 export class CalculatePriceDto {
+  @ApiProperty({
+    description: 'ID do tipo de corrida',
+    example: 'clxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+  })
+  @IsString()
+  rideTypeId: string;
+
   @ApiProperty({
     description: 'Distância em metros',
     example: 5000,

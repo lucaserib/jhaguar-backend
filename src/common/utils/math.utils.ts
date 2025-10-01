@@ -7,7 +7,7 @@
 /**
  * Calcula a distância entre duas coordenadas usando a fórmula de Haversine
  * @param lat1 Latitude do ponto 1
- * @param lng1 Longitude do ponto 1  
+ * @param lng1 Longitude do ponto 1
  * @param lat2 Latitude do ponto 2
  * @param lng2 Longitude do ponto 2
  * @returns Distância em quilômetros
@@ -21,14 +21,14 @@ export function calculateHaversineDistance(
   const R = 6371; // Raio da Terra em km
   const dLat = degToRad(lat2 - lat1);
   const dLng = degToRad(lng2 - lng1);
-  
+
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(degToRad(lat1)) *
       Math.cos(degToRad(lat2)) *
       Math.sin(dLng / 2) *
       Math.sin(dLng / 2);
-      
+
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distância em km
 }
@@ -70,8 +70,9 @@ export function calculateBearing(
   const lat2Rad = degToRad(lat2);
 
   const y = Math.sin(dLng) * Math.cos(lat2Rad);
-  const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - 
-            Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLng);
+  const x =
+    Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+    Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLng);
 
   const bearing = radToDeg(Math.atan2(y, x));
   return (bearing + 360) % 360; // Normalizar para 0-360
@@ -98,13 +99,15 @@ export function calculateDestinationPoint(
 
   const destLatRad = Math.asin(
     Math.sin(latRad) * Math.cos(distance / R) +
-    Math.cos(latRad) * Math.sin(distance / R) * Math.cos(bearingRad)
+      Math.cos(latRad) * Math.sin(distance / R) * Math.cos(bearingRad),
   );
 
-  const destLngRad = lngRad + Math.atan2(
-    Math.sin(bearingRad) * Math.sin(distance / R) * Math.cos(latRad),
-    Math.cos(distance / R) - Math.sin(latRad) * Math.sin(destLatRad)
-  );
+  const destLngRad =
+    lngRad +
+    Math.atan2(
+      Math.sin(bearingRad) * Math.sin(distance / R) * Math.cos(latRad),
+      Math.cos(distance / R) - Math.sin(latRad) * Math.sin(destLatRad),
+    );
 
   return {
     latitude: radToDeg(destLatRad),
@@ -115,14 +118,17 @@ export function calculateDestinationPoint(
 /**
  * Valida se uma coordenada está dentro dos limites válidos
  * @param latitude Latitude a validar
- * @param longitude Longitude a validar  
+ * @param longitude Longitude a validar
  * @returns true se válida, false caso contrário
  */
-export function isValidCoordinate(latitude: number, longitude: number): boolean {
+export function isValidCoordinate(
+  latitude: number,
+  longitude: number,
+): boolean {
   return (
-    latitude >= -90 && 
-    latitude <= 90 && 
-    longitude >= -180 && 
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
     longitude <= 180 &&
     !isNaN(latitude) &&
     !isNaN(longitude)
@@ -135,7 +141,7 @@ export function isValidCoordinate(latitude: number, longitude: number): boolean 
  * @returns Área em quilômetros quadrados
  */
 export function calculatePolygonArea(
-  coordinates: { latitude: number; longitude: number }[]
+  coordinates: { latitude: number; longitude: number }[],
 ): number {
   if (coordinates.length < 3) {
     return 0;
@@ -154,7 +160,7 @@ export function calculatePolygonArea(
     area += (xj - xi) * (2 + Math.sin(yi) + Math.sin(yj));
   }
 
-  area = Math.abs(area) * R * R / 2;
+  area = (Math.abs(area) * R * R) / 2;
   return area;
 }
 
@@ -168,7 +174,7 @@ export function calculatePolygonArea(
 export function findNearestPoint(
   targetLat: number,
   targetLng: number,
-  points: { latitude: number; longitude: number; [key: string]: any }[]
+  points: { latitude: number; longitude: number; [key: string]: any }[],
 ): { point: any; distance: number } | null {
   if (points.length === 0) {
     return null;
@@ -179,7 +185,7 @@ export function findNearestPoint(
     targetLat,
     targetLng,
     nearest.latitude,
-    nearest.longitude
+    nearest.longitude,
   );
 
   for (let i = 1; i < points.length; i++) {
@@ -187,7 +193,7 @@ export function findNearestPoint(
       targetLat,
       targetLng,
       points[i].latitude,
-      points[i].longitude
+      points[i].longitude,
     );
 
     if (distance < minDistance) {

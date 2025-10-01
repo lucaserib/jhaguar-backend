@@ -27,43 +27,145 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private jwtService: JwtService,
   ) {}
 
-  handleConnection(client: Socket) {
-    const driverId = this.extractDriverId(client);
+  async handleConnection(client: Socket) {
+    const driverId = await this.extractDriverId(client);
     this.logger.log(`Driver connected: ${client.id}, driverId: ${driverId}`);
 
     if (driverId) {
       this.connectedDrivers.set(client.id, driverId);
       client.join(`driver:${driverId}`);
+
+      // CORREÇÃO: NÃO forçar online automaticamente - apenas conectar WebSocket
+      // O motorista deve clicar manualmente no botão para ficar online
+      try {
+        // Apenas registrar conexão, sem alterar status no banco
+        // await this.driversService.updateAvailability(driverId, {
+        //   isOnline: true,
+        //   isAvailable: false,
+        // });
+        this.logger.log(
+          `✅ Driver ${driverId} WebSocket connected (status unchanged)`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `❌ Failed to set driver ${driverId} online: ${error.message}`,
+        );
+      }
+
       this.logger.log(`Driver ${driverId} joined room driver:${driverId}`);
     }
   }
 
-  handleDisconnect(client: Socket) {
+  async handleDisconnect(client: Socket) {
     const driverId = this.connectedDrivers.get(client.id);
     this.logger.log(`Driver disconnected: ${client.id}, driverId: ${driverId}`);
 
     if (driverId) {
       this.connectedDrivers.delete(client.id);
       client.leave(`driver:${driverId}`);
+
+      // NOVO: Automaticamente marcar motorista como offline no banco
+      try {
+        await this.driversService.updateAvailability(driverId, {
+          isOnline: false,
+          isAvailable: false, // Não disponível quando desconecta
+        });
+        this.logger.log(
+          `✅ Driver ${driverId} automatically set to OFFLINE in database`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `❌ Failed to set driver ${driverId} offline: ${error.message}`,
+        );
+      }
+
       this.logger.log(`Driver ${driverId} left room driver:${driverId}`);
     }
   }
 
-  @SubscribeMessage('driver:online')
-  handleDriverOnline(
+  @SubscribeMessage('driver:start-receiving-rides')
+  async handleDriverStartReceivingRides(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      driverId: string;
+      location?: { latitude: number; longitude: number };
+    },
+  ) {
+    this.logger.log(`Driver ${data.driverId} starting to receive rides`);
+
+    try {
+      // Atualizar status para disponível no banco de dados
+      await this.driversService.updateAvailability(data.driverId, {
+        isOnline: true,
+        isAvailable: true,
+        currentLocation: data.location,
+      });
+
+      // Confirmar para o motorista
+      client.emit('driver:availability-updated', {
+        isAvailable: true,
+        message: 'Agora você está disponível para receber corridas',
+        timestamp: new Date(),
+      });
+
+      // Broadcast que motorista ficou disponível para sistema de matchmaking
+      this.server.emit('driver:status-changed', {
+        driverId: data.driverId,
+        status: 'available',
+        timestamp: new Date(),
+      });
+
+      this.logger.log(`✅ Driver ${data.driverId} is now AVAILABLE for rides`);
+    } catch (error) {
+      this.logger.error(`❌ Failed to make driver available: ${error.message}`);
+      client.emit('error', {
+        message: 'Erro ao ficar disponível para corridas',
+        code: 'AVAILABILITY_ERROR',
+      });
+    }
+  }
+
+  @SubscribeMessage('driver:stop-receiving-rides')
+  async handleDriverStopReceivingRides(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { driverId: string },
   ) {
-    this.logger.log(`Driver going online: ${data.driverId}`);
-    client.join(`driver:${data.driverId}`);
-    this.connectedDrivers.set(client.id, data.driverId);
+    this.logger.log(`Driver ${data.driverId} stopping to receive rides`);
 
-    // Broadcast que motorista ficou online para sistema de matchmaking
-    this.server.emit('driver:status-changed', {
-      driverId: data.driverId,
-      status: 'online',
-      timestamp: new Date(),
-    });
+    try {
+      // Atualizar status para indisponível no banco de dados
+      await this.driversService.updateAvailability(data.driverId, {
+        isOnline: true, // Ainda conectado, mas não disponível
+        isAvailable: false,
+      });
+
+      // Confirmar para o motorista
+      client.emit('driver:availability-updated', {
+        isAvailable: false,
+        message: 'Você não está mais disponível para corridas',
+        timestamp: new Date(),
+      });
+
+      // Broadcast que motorista ficou indisponível
+      this.server.emit('driver:status-changed', {
+        driverId: data.driverId,
+        status: 'unavailable',
+        timestamp: new Date(),
+      });
+
+      this.logger.log(
+        `✅ Driver ${data.driverId} is now UNAVAILABLE for rides`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `❌ Failed to make driver unavailable: ${error.message}`,
+      );
+      client.emit('error', {
+        message: 'Erro ao parar de receber corridas',
+        code: 'AVAILABILITY_ERROR',
+      });
+    }
   }
 
   @SubscribeMessage('driver:offline')
@@ -117,9 +219,10 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('driver:accept-ride')
   async handleAcceptRide(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { 
-      rideId: string; 
-      driverId: string; 
+    @MessageBody()
+    data: {
+      rideId: string;
+      driverId: string;
       acceptedAt: string;
       currentLocation?: { latitude: number; longitude: number };
       estimatedPickupTime?: number;
@@ -127,12 +230,19 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     try {
       this.logger.log(`Driver ${data.driverId} accepting ride ${data.rideId}`);
-      
+
       // Chamar o serviço de corridas para processar a aceitação
-      const result = await this.driversService.acceptRideRequest(data.driverId, data.rideId, {
-        currentLocation: data.currentLocation || { latitude: 0, longitude: 0 },
-        estimatedPickupTime: data.estimatedPickupTime || 10
-      });
+      const result = await this.driversService.acceptRideRequest(
+        data.driverId,
+        data.rideId,
+        {
+          currentLocation: data.currentLocation || {
+            latitude: 0,
+            longitude: 0,
+          },
+          estimatedPickupTime: data.estimatedPickupTime || 10,
+        },
+      );
 
       if (result.success) {
         // Confirmar para o motorista que a ação foi processada
@@ -165,16 +275,17 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('driver:reject-ride')
   async handleRejectRide(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { 
-      rideId: string; 
-      driverId: string; 
-      reason?: string; 
-      rejectedAt: string 
+    @MessageBody()
+    data: {
+      rideId: string;
+      driverId: string;
+      reason?: string;
+      rejectedAt: string;
     },
   ) {
     try {
       this.logger.log(`Driver ${data.driverId} rejecting ride ${data.rideId}`);
-      
+
       // Emitir para o sistema de corridas que a corrida foi rejeitada
       this.server.emit('ride:driver-rejected', {
         rideId: data.rideId,
@@ -203,11 +314,14 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('driver:status-update')
   async handleDriverStatusUpdate(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { driverId: string; status: string; timestamp: string },
+    @MessageBody()
+    data: { driverId: string; status: string; timestamp: string },
   ) {
     try {
-      this.logger.log(`Driver ${data.driverId} updating status to ${data.status}`);
-      
+      this.logger.log(
+        `Driver ${data.driverId} updating status to ${data.status}`,
+      );
+
       // Broadcast status change
       this.server.emit('driver:status-changed', {
         driverId: data.driverId,
@@ -281,7 +395,7 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return this.connectedDrivers.size;
   }
 
-  private extractDriverId(client: Socket): string | null {
+  private async extractDriverId(client: Socket): Promise<string | null> {
     try {
       // Extrair token do header de autorização ou query params
       const token =
@@ -296,9 +410,21 @@ export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Decodificar JWT
       const payload = this.jwtService.verify(token);
+      const userId = payload.sub || payload.userId;
 
-      // Retornar o userId (que será usado para buscar o driverId)
-      return payload.sub || payload.userId;
+      if (!userId) {
+        this.logger.warn('No userId found in JWT payload');
+        return null;
+      }
+
+      // Buscar o driverId a partir do userId
+      const driver = await this.driversService.findByUserId(userId);
+      if (!driver) {
+        this.logger.warn(`No driver found for userId: ${userId}`);
+        return null;
+      }
+
+      return driver.id;
     } catch (error) {
       this.logger.error(
         `Error extracting driver ID from JWT: ${error.message}`,

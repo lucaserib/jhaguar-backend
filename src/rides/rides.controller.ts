@@ -42,7 +42,10 @@ import { randomUUID } from 'crypto';
 export class RidesController {
   constructor(private readonly ridesService: RidesService) {}
 
-  private generateDeterministicKey(userId: string, createRideDto: CreateRideDto): string {
+  private generateDeterministicKey(
+    userId: string,
+    createRideDto: CreateRideDto,
+  ): string {
     // Gerar chave baseada em dados únicos da corrida para evitar duplicações
     const keyData = {
       userId,
@@ -51,12 +54,16 @@ export class RidesController {
       destLat: createRideDto.destinationLatitude,
       destLng: createRideDto.destinationLongitude,
       rideTypeId: createRideDto.rideTypeId,
-      timestamp: Math.floor(Date.now() / 30000), // Janela de 30 segundos
+      timestamp: Math.floor(Date.now() / 3000), // Janela reduzida para 3 segundos
+      random: Math.random().toString(36).substring(2, 8), // Adicionar componente aleatório
     };
-    
+
     // Criar hash simples baseado nos dados
     const keyString = JSON.stringify(keyData);
-    const hash = Buffer.from(keyString).toString('base64').replace(/[^a-zA-Z0-9]/g, '').substring(0, 16);
+    const hash = Buffer.from(keyString)
+      .toString('base64')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .substring(0, 16);
     return `auto-${hash}`;
   }
 
@@ -116,7 +123,8 @@ export class RidesController {
     @Res({ passthrough: true }) res?: Response,
   ) {
     // Gerar Idempotency-Key determinístico baseado no conteúdo se ausente
-    const key = idemKey || this.generateDeterministicKey(user.id, createRideDto);
+    const key =
+      idemKey || this.generateDeterministicKey(user.id, createRideDto);
 
     // Normalização do payload flat -> nested
     if (
@@ -533,7 +541,8 @@ export class RidesController {
   @Post('search-options')
   @ApiOperation({
     summary: 'Buscar opções de corrida disponíveis',
-    description: 'Retorna apenas tipos de corrida que têm motoristas online disponíveis na região',
+    description:
+      'Retorna apenas tipos de corrida que têm motoristas online disponíveis na região',
   })
   @ApiResponse({
     status: 200,
@@ -629,7 +638,8 @@ export class RidesController {
   @Post('cleanup/orphaned')
   @ApiOperation({
     summary: 'Limpar rides órfãs e pendentes',
-    description: 'Remove rides em estados pendentes há mais de 10 minutos para evitar bloqueios'
+    description:
+      'Remove rides em estados pendentes há mais de 10 minutos para evitar bloqueios',
   })
   @ApiResponse({
     status: 200,
@@ -655,7 +665,7 @@ export class RidesController {
   @Get('status/pending')
   @ApiOperation({
     summary: 'Verificar rides pendentes',
-    description: 'Lista rides em estados pendentes para debug'
+    description: 'Lista rides em estados pendentes para debug',
   })
   async checkPendingRides() {
     try {
@@ -665,26 +675,27 @@ export class RidesController {
             in: ['REQUESTED', 'ACCEPTED', 'IN_PROGRESS'],
           },
         },
-        include: {
-          passenger: {
-            include: { user: true }
-          }
+        include: { Passenger: {
+            include: { User: true },
+          },
         },
-        orderBy: { createdAt: 'desc' }
+        orderBy: { createdAt: 'desc' },
       });
 
       return {
         success: true,
         data: {
           count: pendingRides.length,
-          rides: pendingRides.map(ride => ({
+          rides: pendingRides.map((ride) => ({
             id: ride.id,
             status: ride.status,
-            passengerName: ride.passenger?.user?.firstName || 'N/A',
+            passengerName: ride.Passenger?.User?.firstName || 'N/A',
             origin: ride.originAddress,
             createdAt: ride.createdAt,
-            ageMinutes: Math.floor((Date.now() - ride.createdAt.getTime()) / (1000 * 60)),
-          }))
+            ageMinutes: Math.floor(
+              (Date.now() - ride.createdAt.getTime()) / (1000 * 60),
+            ),
+          })),
         },
         message: `${pendingRides.length} rides pendentes encontradas`,
       };
@@ -696,5 +707,4 @@ export class RidesController {
       };
     }
   }
-
 }

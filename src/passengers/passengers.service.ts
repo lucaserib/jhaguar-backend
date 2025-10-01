@@ -18,18 +18,25 @@ export class PassengersService {
     }
 
     // Verificar se passageiro já existe
-    const existingPassenger = await this.findByUserId(createPassengerDto.userId);
+    const existingPassenger = await this.findByUserId(
+      createPassengerDto.userId,
+    );
     if (existingPassenger) {
       // Atualizar dados se necessário e retornar o existente
       return this.prisma.passenger.update({
         where: { userId: createPassengerDto.userId },
         data: {
-          prefersFemaleDriver: createPassengerDto.prefersFemaleDriver || existingPassenger.prefersFemaleDriver,
-          specialNeeds: createPassengerDto.specialNeeds || existingPassenger.specialNeeds,
-          specialNeedsDesc: createPassengerDto.specialNeedsDesc || existingPassenger.specialNeedsDesc,
+          prefersFemaleDriver:
+            createPassengerDto.prefersFemaleDriver ||
+            existingPassenger.prefersFemaleDriver,
+          specialNeeds:
+            createPassengerDto.specialNeeds || existingPassenger.specialNeeds,
+          specialNeedsDesc:
+            createPassengerDto.specialNeedsDesc ||
+            existingPassenger.specialNeedsDesc,
         },
         include: {
-          user: {
+          User: {
             select: {
               firstName: true,
               lastName: true,
@@ -50,7 +57,7 @@ export class PassengersService {
         specialNeedsDesc: createPassengerDto.specialNeedsDesc,
       },
       include: {
-        user: {
+        User: {
           select: {
             firstName: true,
             lastName: true,
@@ -66,7 +73,7 @@ export class PassengersService {
   async findAll() {
     return this.prisma.passenger.findMany({
       include: {
-        user: {
+        User: {
           select: {
             firstName: true,
             lastName: true,
@@ -83,7 +90,7 @@ export class PassengersService {
     const passenger = await this.prisma.passenger.findUnique({
       where: { id },
       include: {
-        user: {
+        User: {
           select: {
             firstName: true,
             lastName: true,
@@ -106,7 +113,7 @@ export class PassengersService {
     const passenger = await this.prisma.passenger.findUnique({
       where: { userId },
       include: {
-        user: {
+        User: {
           select: {
             firstName: true,
             lastName: true,

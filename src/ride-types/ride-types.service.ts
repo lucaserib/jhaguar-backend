@@ -260,7 +260,7 @@ export class RideTypesService {
     try {
       const rideType = await this.findRideTypeById(calculateDto.rideTypeId);
 
-      let {
+      const {
         distance,
         duration,
         surgeMultiplier = 1.0,
@@ -278,14 +278,14 @@ export class RideTypesService {
         throw new BadRequestException('Duração inválida');
       }
 
-      // Converter e validar entradas
+      // Converter e validar entradas - assumindo que distance já vem em metros e duration em segundos
       const distanceInMeters =
         typeof distance === 'string'
-          ? parseFloat(String(distance).replace(/[^\d.]/g, '')) * 1000
+          ? parseFloat(String(distance).replace(/[^\d.]/g, ''))
           : Number(distance);
       const durationInSeconds =
         typeof duration === 'string'
-          ? parseFloat(String(duration).replace(/[^\d.]/g, '')) * 60
+          ? parseFloat(String(duration).replace(/[^\d.]/g, ''))
           : Number(duration);
 
       if (rideType.maxDistance && distanceInMeters > rideType.maxDistance) {
@@ -368,9 +368,8 @@ export class RideTypesService {
 
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: {
-        user: true,
-        vehicle: true,
+      include: { User: true,
+        Vehicle: true,
       },
     });
 
@@ -420,9 +419,8 @@ export class RideTypesService {
   ): Promise<any> {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: {
-        user: true,
-        vehicle: true,
+      include: { User: true,
+        Vehicle: true,
       },
     });
 
@@ -463,8 +461,7 @@ export class RideTypesService {
             rideTypeId,
             isActive: true,
           },
-          include: {
-            rideType: true,
+          include: { RideTypeConfig: true,
           },
         }),
       ),
@@ -492,11 +489,10 @@ export class RideTypesService {
 
     return this.prisma.driverRideType.findMany({
       where: { driverId },
-      include: {
-        rideType: true,
+      include: { RideTypeConfig: true,
       },
       orderBy: {
-        rideType: {
+        RideTypeConfig: {
           priority: 'asc',
         },
       },
@@ -698,7 +694,7 @@ export class RideTypesService {
       isOnline: true,
       isAvailable: true,
       accountStatus: 'APPROVED',
-      driverRideTypes: {
+      DriverRideType: {
         some: {
           rideTypeId,
           isActive: true,
@@ -707,22 +703,22 @@ export class RideTypesService {
     };
 
     if (rideType.femaleOnly) {
-      driverFilters.user = {
+      driverFilters.User = {
         gender: Gender.FEMALE,
       };
     }
 
     if (rideType.requiresArmored) {
-      driverFilters.vehicle = {
+      driverFilters.Vehicle = {
         isArmored: true,
       };
     }
 
     if (rideType.requiresPetFriendly) {
-      if (driverFilters.vehicle) {
-        driverFilters.vehicle.isPetFriendly = true;
+      if (driverFilters.Vehicle) {
+        driverFilters.Vehicle.isPetFriendly = true;
       } else {
-        driverFilters.vehicle = { isPetFriendly: true };
+        driverFilters.Vehicle = { isPetFriendly: true };
       }
     }
 

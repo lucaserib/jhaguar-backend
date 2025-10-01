@@ -33,28 +33,28 @@ export class LoggingInterceptor implements NestInterceptor {
         next: (data) => {
           const duration = Date.now() - startTime;
           this.logger.log(
-            `[${method}] ${url} - ${context.switchToHttp().getResponse().statusCode} - ${duration}ms`
+            `[${method}] ${url} - ${context.switchToHttp().getResponse().statusCode} - ${duration}ms`,
           );
 
           // Log important operations for audit
           if (this.isAuditableOperation(method, url)) {
             this.logger.log(
-              `[AUDIT] ${method} ${url} by ${userId} (${userType}) - Success in ${duration}ms`
+              `[AUDIT] ${method} ${url} by ${userId} (${userType}) - Success in ${duration}ms`,
             );
           }
         },
         error: (error) => {
           const duration = Date.now() - startTime;
           this.logger.error(
-            `[${method}] ${url} - ERROR ${error.status || 500} - ${duration}ms - ${error.message}`
+            `[${method}] ${url} - ERROR ${error.status || 500} - ${duration}ms - ${error.message}`,
           );
 
           // Always log errors for audit
           this.logger.error(
-            `[AUDIT] ${method} ${url} by ${userId} (${userType}) - ERROR: ${error.message}`
+            `[AUDIT] ${method} ${url} by ${userId} (${userType}) - ERROR: ${error.message}`,
           );
         },
-      })
+      }),
     );
   }
 
@@ -63,7 +63,7 @@ export class LoggingInterceptor implements NestInterceptor {
     const sanitized = { ...body };
 
     for (const key of Object.keys(sanitized)) {
-      if (sensitive.some(s => key.toLowerCase().includes(s))) {
+      if (sensitive.some((s) => key.toLowerCase().includes(s))) {
         sanitized[key] = '[REDACTED]';
       }
     }
@@ -82,8 +82,9 @@ export class LoggingInterceptor implements NestInterceptor {
       '/payments/',
     ];
 
-    return auditablePatterns.some(pattern => 
-      new RegExp(pattern).test(url)
-    ) || ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+    return (
+      auditablePatterns.some((pattern) => new RegExp(pattern).test(url)) ||
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+    );
   }
 }

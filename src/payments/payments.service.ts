@@ -52,12 +52,18 @@ export class PaymentsService {
 
     if (this.isStripeEnabled) {
       this.stripe = new Stripe(stripeKey!, {
-        apiVersion: '2025-06-30.basil',
+        apiVersion: '2022-11-15',
       });
     }
 
     this.logger.log(
-      `PaymentsService iniciado - Modo: ${this.isStripeEnabled ? 'HABILITADO' : 'DESABILITADO'} | Simulação: ${this.isSimulationMode ? 'SIMULAÇÃO' : 'PRODUÇÃO'} | Taxa da plataforma: ${(this.PLATFORM_FEE_PERCENTAGE * 100).toFixed(1)}%`,
+      `PaymentsService iniciado - Modo: ${
+        this.isStripeEnabled ? 'HABILITADO' : 'DESABILITADO'
+      } | Simulação: ${
+        this.isSimulationMode ? 'SIMULAÇÃO' : 'PRODUÇÃO'
+      } | Taxa da plataforma: ${(this.PLATFORM_FEE_PERCENTAGE * 100).toFixed(
+        1,
+      )}%`,
     );
   }
 
@@ -66,14 +72,14 @@ export class PaymentsService {
   async getOrCreateWallet(userId: string): Promise<any> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { wallet: true },
+      include: { UserWallet: true },
     });
 
     if (!user) {
       throw new NotFoundException('Usuário não encontrado');
     }
 
-    if (!user.wallet) {
+    if (!user.UserWallet) {
       try {
         const wallet = await this.prisma.userWallet.create({
           data: {
@@ -85,7 +91,9 @@ export class PaymentsService {
       } catch (error: any) {
         // Se for erro de constraint unique, tenta buscar a wallet existente
         if (error.code === 'P2002' && error.meta?.target?.includes('userId')) {
-          this.logger.warn(`Wallet já existe para usuário ${userId}, buscando...`);
+          this.logger.warn(
+            `Wallet já existe para usuário ${userId}, buscando...`,
+          );
           const existingWallet = await this.prisma.userWallet.findUnique({
             where: { userId },
           });
@@ -97,7 +105,7 @@ export class PaymentsService {
       }
     }
 
-    return user.wallet;
+    return user.UserWallet;
   }
 
   async getWalletBalance(userId: string): Promise<WalletBalanceResponse> {
@@ -142,7 +150,9 @@ export class PaymentsService {
             type: TransactionType.WALLET_TOPUP,
             status: TransactionStatus.COMPLETED,
             amount: addBalanceDto.amount,
-            description: `Adição de saldo via ${addBalanceDto.paymentMethod || 'cartão'} (simulação)`,
+            description: `Adição de saldo via ${
+              addBalanceDto.paymentMethod || 'cartão'
+            } (simulação)`,
             stripePaymentIntentId: `pi_sim_${Date.now()}`,
             metadata: {
               paymentMethod: addBalanceDto.paymentMethod || 'CREDIT_CARD',
@@ -185,7 +195,9 @@ export class PaymentsService {
           type: TransactionType.WALLET_TOPUP,
           status: TransactionStatus.PENDING,
           amount: addBalanceDto.amount,
-          description: `Adição de saldo via ${addBalanceDto.paymentMethod || 'cartão'}`,
+          description: `Adição de saldo via ${
+            addBalanceDto.paymentMethod || 'cartão'
+          }`,
           metadata: {
             paymentMethod: addBalanceDto.paymentMethod || 'CREDIT_CARD',
             isSimulation: false,
@@ -236,116 +248,164 @@ export class PaymentsService {
     message: string;
   }> {
     try {
-      return await this.prisma.$transaction(async (prisma) => {
-        // Buscar carteiras
-        const fromWallet = await this.getOrCreateWallet(fromUserId);
-        const toWallet = await this.getOrCreateWallet(toUserId);
+      return await this.prisma.$transaction(
+        async (prisma) => {
+          // 🔒 CRITICAL FIX: Row-level locking to prevent race conditions
+          // Create wallets if they don't exist, then lock them
+          await this.getOrCreateWallet(fromUserId);
+          await this.getOrCreateWallet(toUserId);
 
-        // Validações with detailed logging
-        if (fromWallet.isBlocked) {
-          this.logger.error(`❌ Transfer failed: Sender wallet ${fromUserId} is blocked: ${fromWallet.blockReason}`);
-          throw new BadRequestException(
-            `Carteira do remetente bloqueada: ${fromWallet.blockReason}`,
+          // Buscar carteiras com SELECT FOR UPDATE para garantir lock exclusivo
+          const [fromWallet, toWallet] = await Promise.all([
+            prisma.$queryRaw<
+              any[]
+            >`SELECT * FROM "UserWallet" WHERE "userId" = ${fromUserId} FOR UPDATE`,
+            prisma.$queryRaw<
+              any[]
+            >`SELECT * FROM "UserWallet" WHERE "userId" = ${toUserId} FOR UPDATE`,
+          ]);
+
+          if (!fromWallet[0] || !toWallet[0]) {
+            throw new BadRequestException(
+              'Carteiras não encontradas após criação',
+            );
+          }
+
+          const fromWalletData = fromWallet[0];
+          const toWalletData = toWallet[0];
+
+          // Validações com dados travados
+          if (fromWalletData.isBlocked) {
+            this.logger.error(
+              `❌ Transfer failed: Sender wallet ${fromUserId} is blocked: ${fromWalletData.blockReason}`,
+            );
+            throw new BadRequestException(
+              `Carteira do remetente bloqueada: ${fromWalletData.blockReason}`,
+            );
+          }
+
+          if (toWalletData.isBlocked) {
+            this.logger.error(
+              `❌ Transfer failed: Recipient wallet ${toUserId} is blocked: ${toWalletData.blockReason}`,
+            );
+            throw new BadRequestException(
+              `Carteira do destinatário bloqueada: ${toWalletData.blockReason}`,
+            );
+          }
+
+          // CRITICAL: Usar saldo atual travado, não cache
+          const currentFromBalance = parseFloat(
+            fromWalletData.balance.toString(),
           );
-        }
+          const currentToBalance = parseFloat(toWalletData.balance.toString());
 
-        if (toWallet.isBlocked) {
-          this.logger.error(`❌ Transfer failed: Recipient wallet ${toUserId} is blocked: ${toWallet.blockReason}`);
-          throw new BadRequestException(
-            `Carteira do destinatário bloqueada: ${toWallet.blockReason}`,
+          if (currentFromBalance < amount) {
+            this.logger.error(
+              `❌ Transfer failed: Insufficient balance. Sender ${fromUserId} has R$ ${currentFromBalance.toFixed(
+                2,
+              )}, needs R$ ${amount.toFixed(2)}`,
+            );
+            throw new BadRequestException(
+              `Saldo insuficiente. Disponível: R$ ${currentFromBalance.toFixed(
+                2,
+              )}, Necessário: R$ ${amount.toFixed(2)}`,
+            );
+          }
+
+          this.logger.log(
+            `🔄 Processing wallet transfer: R$ ${amount} from ${fromUserId} (balance: R$ ${currentFromBalance.toFixed(
+              2,
+            )}) to ${toUserId} (balance: R$ ${currentToBalance.toFixed(2)})`,
           );
-        }
 
-        if (fromWallet.balance < amount) {
-          this.logger.error(
-            `❌ Transfer failed: Insufficient balance. Sender ${fromUserId} has R$ ${fromWallet.balance.toFixed(2)}, needs R$ ${amount.toFixed(2)}`,
-          );
-          throw new BadRequestException(
-            `Saldo insuficiente. Disponível: R$ ${fromWallet.balance.toFixed(2)}, Necessário: R$ ${amount.toFixed(2)}`,
-          );
-        }
+          // Calcular novos saldos
+          const newFromBalance = currentFromBalance - amount;
+          const newToBalance = currentToBalance + amount;
 
-        this.logger.log(
-          `🔄 Processing wallet transfer: R$ ${amount} from ${fromUserId} (balance: R$ ${fromWallet.balance.toFixed(2)}) to ${toUserId} (balance: R$ ${toWallet.balance.toFixed(2)})`,
-        );
+          // Atualizar saldos atomicamente
+          const [updatedFromWallet, updatedToWallet] = await Promise.all([
+            prisma.userWallet.update({
+              where: { id: fromWalletData.id },
+              data: { balance: newFromBalance },
+            }),
+            prisma.userWallet.update({
+              where: { id: toWalletData.id },
+              data: { balance: newToBalance },
+            }),
+          ]);
 
-        // Debitar do remetente
-        const updatedFromWallet = await prisma.userWallet.update({
-          where: { id: fromWallet.id },
-          data: {
-            balance: fromWallet.balance - amount,
-          },
-        });
-
-        // Creditar ao destinatário
-        const updatedToWallet = await prisma.userWallet.update({
-          where: { id: toWallet.id },
-          data: {
-            balance: toWallet.balance + amount,
-          },
-        });
-
-        // Criar transação de débito
-        const debitTransaction = await prisma.transaction.create({
-          data: {
-            userId: fromUserId,
-            walletId: fromWallet.id,
-            rideId,
-            type: TransactionType.RIDE_PAYMENT,
-            status: TransactionStatus.COMPLETED,
-            amount: -amount, // Negativo para débito
-            description: `Transferência enviada: ${description}`,
-            processedAt: new Date(),
-            metadata: {
-              ...metadata,
-              transferType: 'DEBIT',
-              recipientUserId: toUserId,
-              originalAmount: amount,
+          // Criar transação de débito
+          const debitTransaction = await prisma.transaction.create({
+            data: {
+              userId: fromUserId,
+              walletId: fromWalletData.id,
+              rideId,
+              type: TransactionType.RIDE_PAYMENT,
+              status: TransactionStatus.COMPLETED,
+              amount: -amount, // Negativo para débito
+              description: `Transferência enviada: ${description}`,
+              processedAt: new Date(),
+              metadata: {
+                ...metadata,
+                transferType: 'DEBIT',
+                recipientUserId: toUserId,
+                originalAmount: amount,
+                balanceBeforeTransfer: currentFromBalance,
+                balanceAfterTransfer: newFromBalance,
+              },
             },
-          },
-        });
+          });
 
-        // Criar transação de crédito
-        const creditTransaction = await prisma.transaction.create({
-          data: {
-            userId: toUserId,
-            walletId: toWallet.id,
-            rideId,
-            type: TransactionType.RIDE_PAYMENT,
-            status: TransactionStatus.COMPLETED,
-            amount: amount, // Positivo para crédito
-            description: `Transferência recebida: ${description}`,
-            processedAt: new Date(),
-            metadata: {
-              ...metadata,
-              transferType: 'CREDIT',
-              senderUserId: fromUserId,
-              originalAmount: amount,
-              relatedTransactionId: debitTransaction.id,
+          // Criar transação de crédito
+          const creditTransaction = await prisma.transaction.create({
+            data: {
+              userId: toUserId,
+              walletId: toWalletData.id,
+              rideId,
+              type: TransactionType.RIDE_PAYMENT,
+              status: TransactionStatus.COMPLETED,
+              amount: amount, // Positivo para crédito
+              description: `Transferência recebida: ${description}`,
+              processedAt: new Date(),
+              metadata: {
+                ...metadata,
+                transferType: 'CREDIT',
+                senderUserId: fromUserId,
+                originalAmount: amount,
+                relatedTransactionId: debitTransaction.id,
+                balanceBeforeTransfer: currentToBalance,
+                balanceAfterTransfer: newToBalance,
+              },
             },
-          },
-        });
+          });
 
-        this.logger.log(
-          `💰 Transferência realizada: R$ ${amount} de ${fromUserId} para ${toUserId}. Saldos: ${updatedFromWallet.balance.toFixed(2)} -> ${updatedToWallet.balance.toFixed(2)}`,
-        );
+          this.logger.log(
+            `💰 Transferência realizada com LOCKS: R$ ${amount} de ${fromUserId} para ${toUserId}. Saldos: ${newFromBalance.toFixed(
+              2,
+            )} -> ${newToBalance.toFixed(2)}`,
+          );
 
-        return {
-          success: true,
-          data: {
-            amount,
-            fromUserId,
-            toUserId,
-            fromBalance: updatedFromWallet.balance,
-            toBalance: updatedToWallet.balance,
-            debitTransaction: debitTransaction.id,
-            creditTransaction: creditTransaction.id,
-          },
-          message: 'Transferência realizada com sucesso',
-        };
-      });
+          return {
+            success: true,
+            data: {
+              amount,
+              fromUserId,
+              toUserId,
+              fromBalance: newFromBalance,
+              toBalance: newToBalance,
+              debitTransaction: debitTransaction.id,
+              creditTransaction: creditTransaction.id,
+            },
+            message: 'Transferência realizada com sucesso',
+          };
+        },
+        {
+          isolationLevel: 'ReadCommitted', // Optimized for better performance
+          timeout: 15000, // Reduced timeout to prevent cascade failures
+        },
+      );
     } catch (error) {
-      this.logger.error('Erro na transferência:', error);
+      this.logger.error('Erro na transferência com locks:', error);
       return {
         success: false,
         data: null,
@@ -357,6 +417,7 @@ export class PaymentsService {
 
   /**
    * Calcula as taxas da plataforma e valor líquido para o motorista
+   * 🔥 CRITICAL FIX: Use Decimal.js for precise financial calculations
    */
   calculatePlatformFees(rideAmount: number): {
     grossAmount: number;
@@ -364,24 +425,41 @@ export class PaymentsService {
     netAmount: number;
     feePercentage: number;
   } {
-    const platformFee = rideAmount * this.PLATFORM_FEE_PERCENTAGE;
+    // Usar precisão decimal para cálculos financeiros
+    const Decimal = require('decimal.js');
+
+    const grossDecimal = new Decimal(rideAmount);
+    const feePercentageDecimal = new Decimal(this.PLATFORM_FEE_PERCENTAGE);
+
+    const platformFeeDecimal = grossDecimal.mul(feePercentageDecimal);
+    const netAmountDecimal = grossDecimal.minus(platformFeeDecimal);
+
+    // Log para debugging de precisão
+    this.logger.debug(
+      `💰 Fee calculation - Gross: ${grossDecimal.toString()}, Fee: ${platformFeeDecimal.toString()}, Net: ${netAmountDecimal.toString()}`,
+    );
 
     return {
-      grossAmount: rideAmount,
-      platformFee: Math.round(platformFee * 100) / 100, // Arredondar para 2 casas
-      netAmount: Math.round((rideAmount - platformFee) * 100) / 100,
+      grossAmount: parseFloat(grossDecimal.toFixed(2)),
+      platformFee: parseFloat(platformFeeDecimal.toFixed(2)), // Precisão exata para 2 casas
+      netAmount: parseFloat(netAmountDecimal.toFixed(2)), // Precisão exata para 2 casas
       feePercentage: this.PLATFORM_FEE_PERCENTAGE,
     };
   }
 
+  // ==================== PAYMENT PROCESSING BY METHOD ====================
+
   /**
-   * Processa o pagamento completo da corrida: passageiro -> motorista -> taxa
+   * 🔥 UNIFIED PAYMENT PROCESSING: Handle all payment methods correctly
+   * - WALLET_BALANCE: Transfer from passenger to driver, then deduct platform fee from driver
+   * - CASH/PIX/CARD_MACHINE: Only deduct platform fee from driver (payment happens outside app)
    */
-  async processRideWalletPayment(
+  async processRidePaymentByMethod(
+    paymentMethod: PaymentMethod,
+    rideId: string,
     passengerId: string,
     driverId: string,
-    rideAmount: number,
-    rideId: string,
+    amount: number,
     description: string,
   ): Promise<{
     success: boolean;
@@ -389,25 +467,92 @@ export class PaymentsService {
     message: string;
   }> {
     try {
-      // Validate input parameters
-      if (!passengerId || !driverId || !rideId) {
-        this.logger.error(`❌ Invalid parameters for ride payment: passenger=${passengerId}, driver=${driverId}, ride=${rideId}`);
-        throw new BadRequestException('Invalid payment parameters');
-      }
-
-      if (rideAmount <= 0) {
-        this.logger.error(`❌ Invalid ride amount: R$ ${rideAmount}`);
-        throw new BadRequestException('Invalid ride amount');
-      }
-
-      const fees = this.calculatePlatformFees(rideAmount);
-
       this.logger.log(
-        `🎯 Processing ride payment ${rideId}: R$ ${fees.grossAmount} (net: R$ ${fees.netAmount}, platform fee: R$ ${fees.platformFee}) - passenger: ${passengerId}, driver: ${driverId}`,
+        `💳 Processing ${paymentMethod} payment for ride ${rideId}: R$ ${amount}`,
       );
 
-      return await this.prisma.$transaction(async (prisma) => {
-        // 1. Transferir valor total do passageiro para o motorista
+      const fees = this.calculatePlatformFees(amount);
+
+      switch (paymentMethod) {
+        case PaymentMethod.WALLET_BALANCE:
+          // WALLET: Transfer full amount from passenger to driver, then deduct platform fee
+          return await this.processWalletBalancePayment(
+            passengerId,
+            driverId,
+            fees,
+            rideId,
+            description,
+          );
+
+        case PaymentMethod.CASH:
+        case PaymentMethod.PIX:
+        case PaymentMethod.CARD_MACHINE:
+          // PHYSICAL PAYMENTS: Only deduct platform fee from driver
+          return await this.processPhysicalPayment(
+            driverId,
+            fees,
+            rideId,
+            description,
+            paymentMethod,
+          );
+
+        default:
+          throw new BadRequestException(
+            `Unsupported payment method: ${paymentMethod}`,
+          );
+      }
+    } catch (error) {
+      this.logger.error(
+        `❌ Payment processing failed for ${paymentMethod}:`,
+        error,
+      );
+      return {
+        success: false,
+        data: null,
+        message:
+          error instanceof Error ? error.message : 'Payment processing failed',
+      };
+    }
+  }
+
+  /**
+   * Process wallet balance payment: Passenger -> Driver -> Platform Fee
+   */
+  private async processWalletBalancePayment(
+    passengerId: string,
+    driverId: string,
+    fees: {
+      grossAmount: number;
+      platformFee: number;
+      netAmount: number;
+      feePercentage: number;
+    },
+    rideId: string,
+    description: string,
+  ) {
+    return await this.prisma.$transaction(
+      async (prisma) => {
+        // 🔒 CRITICAL: Check for duplicate payment processing
+        const existingPayment = await prisma.transaction.findFirst({
+          where: {
+            rideId,
+            type: TransactionType.RIDE_PAYMENT,
+            status: TransactionStatus.COMPLETED,
+            amount: { gt: 0 }, // Credit to driver
+            userId: driverId,
+          },
+        });
+
+        if (existingPayment) {
+          this.logger.warn(
+            `⚠️ Payment already processed for ride ${rideId}. Transaction ID: ${existingPayment.id}`,
+          );
+          throw new BadRequestException(
+            'Pagamento já foi processado para esta corrida',
+          );
+        }
+
+        // 1. Transfer full amount from passenger to driver
         const transferResult = await this.transferWalletBalance(
           passengerId,
           driverId,
@@ -416,6 +561,7 @@ export class PaymentsService {
           rideId,
           {
             ridePayment: true,
+            paymentMethod: 'WALLET_BALANCE',
             grossAmount: fees.grossAmount,
             netAmount: fees.netAmount,
             platformFee: fees.platformFee,
@@ -426,208 +572,224 @@ export class PaymentsService {
           throw new BadRequestException(transferResult.message);
         }
 
-        // 2. Debitar taxa da plataforma do motorista
-        const driverWallet = await this.getOrCreateWallet(driverId);
-        const newBalance = driverWallet.balance - fees.platformFee;
-
-        if (newBalance < this.DRIVER_NEGATIVE_BALANCE_LIMIT) {
-          this.logger.warn(
-            `⚠️ Motorista ${driverId} atingiu limite de saldo negativo. Saldo atual: R$ ${driverWallet.balance}, Taxa: R$ ${fees.platformFee}, Limite: R$ ${this.DRIVER_NEGATIVE_BALANCE_LIMIT}`,
-          );
-
-          // Criar débito pendente que será cobrado depois
-          await prisma.transaction.create({
-            data: {
-              userId: driverId,
-              walletId: driverWallet.id,
-              rideId,
-              type: TransactionType.CANCELLATION_FEE,
-              status: TransactionStatus.PENDING,
-              amount: -fees.platformFee,
-              description: `Taxa da plataforma pendente - ${description}`,
-              metadata: {
-                ridePayment: true,
-                feeType: 'PLATFORM_FEE',
-                feePercentage: fees.feePercentage,
-                originalRideAmount: fees.grossAmount,
-                isPending: true,
-                exceedsNegativeLimit: true,
-                currentBalance: driverWallet.balance,
-                negativeLimit: this.DRIVER_NEGATIVE_BALANCE_LIMIT,
-              },
-            },
-          });
-        } else {
-          // Debitar taxa imediatamente (permitindo saldo negativo até o limite)
-          await prisma.userWallet.update({
-            where: { id: driverWallet.id },
-            data: {
-              balance: newBalance,
-            },
-          });
-
-          await prisma.transaction.create({
-            data: {
-              userId: driverId,
-              walletId: driverWallet.id,
-              rideId,
-              type: TransactionType.CANCELLATION_FEE,
-              status: TransactionStatus.COMPLETED,
-              amount: -fees.platformFee,
-              description: `Taxa da plataforma - ${description}`,
-              processedAt: new Date(),
-              metadata: {
-                ridePayment: true,
-                feeType: 'PLATFORM_FEE',
-                feePercentage: fees.feePercentage,
-                originalRideAmount: fees.grossAmount,
-              },
-            },
-          });
-
-          this.logger.log(
-            `💳 Taxa da plataforma debitada: R$ ${fees.platformFee} do motorista ${driverId}. Novo saldo: R$ ${newBalance}${newBalance < 0 ? ' (NEGATIVO)' : ''}`,
-          );
-        }
+        // 2. Deduct platform fee from driver
+        const feeResult = await this.deductPlatformFeeFromDriver(
+          driverId,
+          fees.platformFee,
+          rideId,
+          description,
+          prisma,
+        );
 
         return {
           success: true,
           data: {
             rideId,
+            paymentMethod: 'WALLET_BALANCE',
             grossAmount: fees.grossAmount,
             netAmount: fees.netAmount,
             platformFee: fees.platformFee,
-            feePercentage: fees.feePercentage,
             transferData: transferResult.data,
+            feeData: feeResult,
           },
-          message: 'Pagamento da corrida processado com sucesso',
+          message: 'Wallet payment processed successfully',
         };
-      });
-    } catch (error) {
-      this.logger.error('Erro ao processar pagamento da corrida:', error);
-      return {
-        success: false,
-        data: null,
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Erro ao processar pagamento da corrida',
-      };
-    }
+      },
+      {
+        isolationLevel: 'ReadCommitted', // Less strict isolation for better performance
+        timeout: 15000, // Reduced timeout to prevent cascade failures
+      },
+    );
   }
 
-  // ==================== SIMPLIFIED WALLET PAYMENT METHOD ====================
+  /**
+   * Process physical payment: Only deduct platform fee from driver
+   */
+  private async processPhysicalPayment(
+    driverId: string,
+    fees: {
+      grossAmount: number;
+      platformFee: number;
+      netAmount: number;
+      feePercentage: number;
+    },
+    rideId: string,
+    description: string,
+    paymentMethod: PaymentMethod,
+  ) {
+    return await this.prisma.$transaction(
+      async (prisma) => {
+        // Only deduct platform fee from driver - passenger pays outside app
+        const feeResult = await this.deductPlatformFeeFromDriver(
+          driverId,
+          fees.platformFee,
+          rideId,
+          description,
+          prisma,
+        );
+
+        return {
+          success: true,
+          data: {
+            rideId,
+            paymentMethod,
+            grossAmount: fees.grossAmount,
+            netAmount: fees.netAmount,
+            platformFee: fees.platformFee,
+            feeData: feeResult,
+            note: `Driver received R$ ${fees.grossAmount} via ${paymentMethod}, platform fee R$ ${fees.platformFee} deducted`,
+          },
+          message: `${paymentMethod} payment processed successfully`,
+        };
+      },
+      {
+        isolationLevel: 'ReadCommitted', // Less strict isolation for better performance
+        timeout: 15000, // Reduced timeout to prevent cascade failures
+      },
+    );
+  }
 
   /**
-   * Simplified method for automatic wallet payment processing on ride completion
+   * Deduct platform fee from driver wallet (allows negative balance up to limit)
    */
-  async processAutomaticWalletPayment(
-    rideId: string,
-    passengerId: string,
+  private async deductPlatformFeeFromDriver(
     driverId: string,
-    amount: number,
-  ): Promise<{
-    success: boolean;
-    data: any;
-    message: string;
-  }> {
-    try {
-      this.logger.log(
-        `🚀 Starting automatic wallet payment for ride ${rideId}: R$ ${amount}`,
+    platformFee: number,
+    rideId: string,
+    description: string,
+    prisma: any,
+  ) {
+    // Lock driver wallet or create if not exists
+    let driverWalletQuery = await prisma.$queryRaw<any[]>`
+      SELECT * FROM "UserWallet" WHERE "userId" = ${driverId} FOR UPDATE
+    `;
+    let driverWalletLocked = driverWalletQuery[0];
+
+    if (!driverWalletLocked) {
+      // Create wallet for driver if it doesn't exist
+      this.logger.warn(
+        `Creating wallet for driver ${driverId} as it doesn't exist`,
+      );
+      try {
+        await prisma.userWallet.create({
+          data: {
+            userId: driverId,
+            balance: 0.0,
+          },
+        });
+
+        // Query again with lock after creation
+        driverWalletQuery = await prisma.$queryRaw<any[]>`
+          SELECT * FROM "UserWallet" WHERE "userId" = ${driverId} FOR UPDATE
+        `;
+        driverWalletLocked = driverWalletQuery[0];
+
+        if (!driverWalletLocked) {
+          throw new BadRequestException(
+            'Failed to create or retrieve driver wallet',
+          );
+        }
+      } catch (error: any) {
+        // Handle race condition where wallet was created by another request
+        if (error.code === 'P2002' && error.meta?.target?.includes('userId')) {
+          this.logger.warn(
+            `Wallet created by another request for driver ${driverId}, retrying query`,
+          );
+          driverWalletQuery = await prisma.$queryRaw<any[]>`
+            SELECT * FROM "UserWallet" WHERE "userId" = ${driverId} FOR UPDATE
+          `;
+          driverWalletLocked = driverWalletQuery[0];
+
+          if (!driverWalletLocked) {
+            throw new BadRequestException(
+              'Driver wallet not found after retry',
+            );
+          }
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    const currentBalance = parseFloat(driverWalletLocked.balance.toString());
+    const newBalance = currentBalance - platformFee;
+
+    if (newBalance < this.DRIVER_NEGATIVE_BALANCE_LIMIT) {
+      this.logger.warn(
+        `⚠️ Driver ${driverId} would exceed negative balance limit. Current: R$ ${currentBalance}, Fee: R$ ${platformFee}, Limit: R$ ${this.DRIVER_NEGATIVE_BALANCE_LIMIT}`,
       );
 
-      // Get wallet balances
-      const passengerWallet = await this.getOrCreateWallet(passengerId);
-      const driverWallet = await this.getOrCreateWallet(driverId);
-
-      // Validate passenger wallet
-      if (passengerWallet.isBlocked) {
-        throw new BadRequestException(
-          `Passenger wallet blocked: ${passengerWallet.blockReason}`,
-        );
-      }
-
-      if (passengerWallet.balance < amount) {
-        throw new BadRequestException(
-          `Insufficient passenger balance. Available: R$ ${passengerWallet.balance.toFixed(2)}, Required: R$ ${amount.toFixed(2)}`,
-        );
-      }
-
-      // Validate driver wallet
-      if (driverWallet.isBlocked) {
-        throw new BadRequestException(
-          `Driver wallet blocked: ${driverWallet.blockReason}`,
-        );
-      }
-
-      // Process the full wallet transfer
-      const transferResult = await this.processRideWalletPayment(
-        passengerId,
-        driverId,
-        amount,
-        rideId,
-        `Automatic payment for completed ride ${rideId.substring(0, 8)}`,
-      );
-
-      if (!transferResult.success) {
-        throw new BadRequestException(`Transfer failed: ${transferResult.message}`);
-      }
-
-      // Update payment record directly
-      await this.prisma.payment.upsert({
-        where: { rideId },
-        create: {
+      // Create pending fee that will be charged later
+      const pendingFeeTransaction = await prisma.transaction.create({
+        data: {
+          userId: driverId,
+          walletId: driverWalletLocked.id,
           rideId,
-          amount,
-          method: PaymentMethod.WALLET_BALANCE,
-          status: PaymentStatus.PAID,
-          confirmedByDriver: true,
-          driverConfirmationTime: new Date(),
-          driverNotes: 'Automatic payment processing for completed ride',
-        },
-        update: {
-          status: PaymentStatus.PAID,
-          confirmedByDriver: true,
-          driverConfirmationTime: new Date(),
-          method: PaymentMethod.WALLET_BALANCE,
-          driverNotes: 'Automatic payment processing for completed ride',
+          type: TransactionType.CANCELLATION_FEE,
+          status: TransactionStatus.PENDING,
+          amount: -platformFee,
+          description: `Taxa da plataforma pendente - ${description}`,
+          metadata: {
+            ridePayment: true,
+            feeType: 'PLATFORM_FEE',
+            originalRideAmount: platformFee + (newBalance - currentBalance),
+            isPending: true,
+            exceedsNegativeLimit: true,
+            currentBalance,
+            negativeLimit: this.DRIVER_NEGATIVE_BALANCE_LIMIT,
+          },
         },
       });
 
-      // Update ride payment status
-      await this.prisma.ride.update({
-        where: { id: rideId },
-        data: {
-          paymentStatus: PaymentStatus.PAID,
-        },
-      });
-
-      this.logger.log(
-        `✅ Automatic wallet payment completed for ride ${rideId}: R$ ${amount} (net: R$ ${transferResult.data.netAmount}, fee: R$ ${transferResult.data.platformFee})`,
-      );
-
       return {
-        success: true,
-        data: {
-          rideId,
-          amount,
-          method: PaymentMethod.WALLET_BALANCE,
-          status: PaymentStatus.PAID,
-          processedAt: new Date(),
-          transferData: transferResult.data,
-          platformFee: transferResult.data.platformFee,
-          netAmount: transferResult.data.netAmount,
-        },
-        message: 'Automatic wallet payment processed successfully',
-      };
-    } catch (error) {
-      this.logger.error(`❌ Automatic wallet payment failed for ride ${rideId}:`, error);
-      return {
-        success: false,
-        data: null,
-        message: error instanceof Error ? error.message : 'Automatic wallet payment failed',
+        type: 'PENDING_FEE',
+        amount: platformFee,
+        transactionId: pendingFeeTransaction.id,
+        currentBalance,
+        message:
+          'Platform fee will be charged when driver has sufficient balance',
       };
     }
+
+    // Deduct fee immediately
+    await prisma.userWallet.update({
+      where: { id: driverWalletLocked.id },
+      data: { balance: newBalance },
+    });
+
+    const feeTransaction = await prisma.transaction.create({
+      data: {
+        userId: driverId,
+        walletId: driverWalletLocked.id,
+        rideId,
+        type: TransactionType.CANCELLATION_FEE,
+        status: TransactionStatus.COMPLETED,
+        amount: -platformFee,
+        description: `Taxa da plataforma - ${description}`,
+        processedAt: new Date(),
+        metadata: {
+          ridePayment: true,
+          feeType: 'PLATFORM_FEE',
+          balanceBeforeDebit: currentBalance,
+          balanceAfterDebit: newBalance,
+        },
+      },
+    });
+
+    this.logger.log(
+      `💳 Platform fee deducted: R$ ${platformFee} from driver ${driverId}. New balance: R$ ${newBalance}${
+        newBalance < 0 ? ' (NEGATIVE)' : ''
+      }`,
+    );
+
+    return {
+      type: 'IMMEDIATE_DEBIT',
+      amount: platformFee,
+      transactionId: feeTransaction.id,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      message: 'Platform fee deducted successfully',
+    };
   }
 
   // ==================== MÉTODOS DE PAGAMENTO ATUALIZADOS ====================
@@ -686,63 +848,83 @@ export class PaymentsService {
     try {
       const exec = async () => {
         const ride = await this.prisma.ride.findFirst({
-        where: {
-          id: processPaymentDto.rideId,
-          passenger: { userId },
-          status: 'COMPLETED', // Only accept completed rides
-        },
-        include: {
-          passenger: { include: { user: true } },
-          driver: { include: { user: true } },
-          payment: true,
-        },
-      });
-
-      if (!ride) {
-        // Provide specific error messages for debugging
-        const rideExists = await this.prisma.ride.findUnique({
-          where: { id: processPaymentDto.rideId },
-          select: { id: true, status: true, passenger: { select: { userId: true } } },
+          where: {
+            id: processPaymentDto.rideId,
+            Passenger: { userId },
+            status: 'COMPLETED', // Only accept completed rides
+          },
+          include: {
+            Passenger: { include: { User: true } },
+            Driver: { include: { User: true } },
+            Payment: true,
+          },
         });
 
-        if (!rideExists) {
-          this.logger.error(`❌ Payment failed: Ride ${processPaymentDto.rideId} not found`);
-          throw new NotFoundException('Ride not found');
+        if (!ride) {
+          // Provide specific error messages for debugging
+          const rideExists = await this.prisma.ride.findUnique({
+            where: { id: processPaymentDto.rideId },
+            select: {
+              id: true,
+              status: true,
+              Passenger: { select: { userId: true } },
+            },
+          });
+
+          if (!rideExists) {
+            this.logger.error(
+              `❌ Payment failed: Ride ${processPaymentDto.rideId} not found`,
+            );
+            throw new NotFoundException('Ride not found');
+          }
+
+          if (rideExists.Passenger.userId !== userId) {
+            this.logger.error(
+              `❌ Payment failed: User ${userId} is not the passenger of ride ${processPaymentDto.rideId}`,
+            );
+            throw new NotFoundException('Ride not found or access denied');
+          }
+
+          if (rideExists.status !== 'COMPLETED') {
+            this.logger.error(
+              `❌ Payment failed: Ride ${processPaymentDto.rideId} is in status ${rideExists.status}, expected COMPLETED`,
+            );
+            throw new BadRequestException(
+              `Ride not completed yet. Current status: ${rideExists.status}`,
+            );
+          }
+
+          throw new NotFoundException(
+            'Ride not found or ride is not completed yet',
+          );
         }
 
-        if (rideExists.passenger.userId !== userId) {
-          this.logger.error(`❌ Payment failed: User ${userId} is not the passenger of ride ${processPaymentDto.rideId}`);
-          throw new NotFoundException('Ride not found or access denied');
+        if (ride.Payment && ride.Payment.status === PaymentStatus.PAID) {
+          this.logger.warn(
+            `⚠️ Payment attempt for already paid ride ${ride.id}`,
+          );
+          throw new ConflictException('Ride already paid');
         }
 
-        if (rideExists.status !== 'COMPLETED') {
-          this.logger.error(`❌ Payment failed: Ride ${processPaymentDto.rideId} is in status ${rideExists.status}, expected COMPLETED`);
-          throw new BadRequestException(`Ride not completed yet. Current status: ${rideExists.status}`);
+        // Additional validation to prevent double payments
+        if (ride.paymentStatus === PaymentStatus.PAID) {
+          this.logger.warn(
+            `⚠️ Payment attempt for ride ${ride.id} with paymentStatus already PAID`,
+          );
+          throw new ConflictException('Ride payment already processed');
         }
 
-        throw new NotFoundException('Ride not found or ride is not completed yet');
-      }
+        this.logger.log(
+          `💳 Processing payment for ride ${ride.id}: ${processPaymentDto.paymentMethod}, amount: R$ ${processPaymentDto.amount}`,
+        );
 
-      if (ride.payment && ride.payment.status === PaymentStatus.PAID) {
-        this.logger.warn(`⚠️ Payment attempt for already paid ride ${ride.id}`);
-        throw new ConflictException('Ride already paid');
-      }
+        const result = await this.processPaymentByMethod(
+          userId,
+          ride,
+          processPaymentDto,
+        );
 
-      // Additional validation to prevent double payments
-      if (ride.paymentStatus === PaymentStatus.PAID) {
-        this.logger.warn(`⚠️ Payment attempt for ride ${ride.id} with paymentStatus already PAID`);
-        throw new ConflictException('Ride payment already processed');
-      }
-
-      this.logger.log(`💳 Processing payment for ride ${ride.id}: ${processPaymentDto.paymentMethod}, amount: R$ ${processPaymentDto.amount}`);
-
-      const result = await this.processPaymentByMethod(
-        userId,
-        ride,
-        processPaymentDto,
-      );
-
-      return result;
+        return result;
       };
 
       if (idempotencyKey && this.idempotency) {
@@ -779,8 +961,15 @@ export class PaymentsService {
       case PaymentMethod.WALLET_BALANCE:
         // For completed rides, process wallet payment immediately
         if (ride.status === 'COMPLETED') {
-          this.logger.log(`🚀 Processing immediate wallet payment for completed ride ${ride.id}`);
-          return this.processCompletedWalletPayment(userId, ride, amount, notes);
+          this.logger.log(
+            `🚀 Processing immediate wallet payment for completed ride ${ride.id}`,
+          );
+          return this.processCompletedWalletPayment(
+            userId,
+            ride,
+            amount,
+            notes,
+          );
         } else {
           // For non-completed rides, use the reservation system (backward compatibility)
           return this.reserveWalletPayment(userId, ride, amount, notes);
@@ -811,14 +1000,14 @@ export class PaymentsService {
     const wallet = await this.getOrCreateWallet(userId);
 
     if (wallet.isBlocked) {
-      throw new BadRequestException(
-        `Wallet blocked: ${wallet.blockReason}`,
-      );
+      throw new BadRequestException(`Wallet blocked: ${wallet.blockReason}`);
     }
 
     if (wallet.balance < amount) {
       throw new BadRequestException(
-        `Insufficient balance. Available: R$ ${wallet.balance.toFixed(2)}, Required: R$ ${amount.toFixed(2)}`,
+        `Insufficient balance. Available: R$ ${wallet.balance.toFixed(
+          2,
+        )}, Required: R$ ${amount.toFixed(2)}`,
       );
     }
 
@@ -826,12 +1015,13 @@ export class PaymentsService {
       `💰 Processing immediate wallet payment R$ ${amount} for completed ride ${ride.id}`,
     );
 
-    // Process the full wallet payment immediately
-    const transferResult = await this.processRideWalletPayment(
-      userId, // passenger
-      ride.driver.userId, // driver
-      amount,
+    // Process the full wallet payment immediately using new unified method
+    const transferResult = await this.processRidePaymentByMethod(
+      PaymentMethod.WALLET_BALANCE,
       ride.id,
+      userId, // passenger
+      ride.Driver.UserId, // driver
+      amount,
       `Completed ride ${ride.id.substring(0, 8)}`,
     );
 
@@ -901,7 +1091,9 @@ export class PaymentsService {
 
     if (wallet.balance < amount) {
       throw new BadRequestException(
-        `Saldo insuficiente. Disponível: R$ ${wallet.balance.toFixed(2)}, Necessário: R$ ${amount.toFixed(2)}`,
+        `Saldo insuficiente. Disponível: R$ ${wallet.balance.toFixed(
+          2,
+        )}, Necessário: R$ ${amount.toFixed(2)}`,
       );
     }
 
@@ -917,7 +1109,10 @@ export class PaymentsService {
         type: TransactionType.RIDE_PAYMENT,
         status: TransactionStatus.PENDING,
         amount: -amount,
-        description: `Pagamento reservado da corrida #${ride.id.substring(0, 8)}`,
+        description: `Pagamento reservado da corrida #${ride.id.substring(
+          0,
+          8,
+        )}`,
         metadata: {
           paymentMethod: PaymentMethod.WALLET_BALANCE,
           driverNotes: notes,
@@ -1030,9 +1225,9 @@ export class PaymentsService {
           driverId,
         },
         include: {
-          payment: true,
-          passenger: { include: { user: { include: { wallet: true } } } },
-          driver: { include: { user: { include: { wallet: true } } } },
+          Payment: true,
+          Passenger: { include: { User: { include: { UserWallet: true } } } },
+          Driver: { include: { User: { include: { UserWallet: true } } } },
         },
       });
 
@@ -1042,7 +1237,7 @@ export class PaymentsService {
         );
       }
 
-      if (!ride.payment) {
+      if (!ride.Payment) {
         throw new BadRequestException(
           'Nenhum pagamento registrado para esta corrida',
         );
@@ -1050,7 +1245,7 @@ export class PaymentsService {
 
       const { paymentReceived, driverNotes } = confirmPaymentDto;
 
-      if (ride.payment.method === PaymentMethod.WALLET_BALANCE) {
+      if (ride.Payment.method === PaymentMethod.WALLET_BALANCE) {
         return this.processWalletConfirmationWithTransfer(
           ride,
           paymentReceived,
@@ -1083,8 +1278,8 @@ export class PaymentsService {
     paymentReceived: boolean,
     driverNotes?: string,
   ): Promise<any> {
-    const passengerWallet = ride.passenger.user.wallet;
-    const driverWallet = ride.driver.user.wallet;
+    const passengerWallet = ride.Passenger.User.UserWallet;
+    const driverWallet = ride.Driver.User.UserWallet;
 
     if (!passengerWallet) {
       throw new BadRequestException('Carteira do passageiro não encontrada');
@@ -1114,11 +1309,12 @@ export class PaymentsService {
         `✅ Confirmação recebida - processando transferência completa da corrida ${ride.id}`,
       );
 
-      const transferResult = await this.processRideWalletPayment(
-        ride.passenger.userId,
-        ride.driver.userId,
-        ride.payment.amount,
+      const transferResult = await this.processRidePaymentByMethod(
+        PaymentMethod.WALLET_BALANCE,
         ride.id,
+        ride.Passenger.UserId,
+        ride.Driver.UserId,
+        ride.payment.amount,
         `Corrida ${ride.id.substring(0, 8)}`,
       );
 
@@ -1172,10 +1368,10 @@ export class PaymentsService {
 
       // Buscar saldos atualizados
       const updatedPassengerWallet = await this.getOrCreateWallet(
-        ride.passenger.userId,
+        ride.Passenger.UserId,
       );
       const updatedDriverWallet = await this.getOrCreateWallet(
-        ride.driver.userId,
+        ride.Driver.UserId,
       );
 
       this.logger.log(
@@ -1307,7 +1503,9 @@ export class PaymentsService {
       where: { id: pendingTransaction.id },
       data: {
         status: TransactionStatus.FAILED,
-        failureReason: `Saldo insuficiente na confirmação. Disponível: R$ ${currentBalance.toFixed(2)}, Necessário: R$ ${ride.payment.amount.toFixed(2)}`,
+        failureReason: `Saldo insuficiente na confirmação. Disponível: R$ ${currentBalance.toFixed(
+          2,
+        )}, Necessário: R$ ${ride.payment.amount.toFixed(2)}`,
         processedAt: new Date(),
       },
     });
@@ -1349,7 +1547,7 @@ export class PaymentsService {
       this.prisma.transaction.findMany({
         where: { userId },
         include: {
-          ride: {
+          Ride: {
             select: {
               id: true,
               originAddress: true,
@@ -1466,7 +1664,7 @@ export class PaymentsService {
   ): Promise<void> {
     const transaction = await this.prisma.transaction.findFirst({
       where: { stripePaymentIntentId: paymentIntent.id },
-      include: { wallet: true },
+      include: { UserWallet: true },
     });
 
     if (transaction && transaction.status === TransactionStatus.PENDING) {
@@ -1479,13 +1677,13 @@ export class PaymentsService {
       });
 
       if (
-        transaction.wallet &&
+        transaction.UserWallet &&
         transaction.type === TransactionType.WALLET_TOPUP
       ) {
         await this.prisma.userWallet.update({
-          where: { id: transaction.wallet.id },
+          where: { id: transaction.UserWallet.id },
           data: {
-            balance: transaction.wallet.balance + transaction.amount,
+            balance: transaction.UserWallet.balance + transaction.amount,
           },
         });
       }

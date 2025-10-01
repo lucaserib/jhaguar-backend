@@ -44,7 +44,6 @@ export class RideTypesController {
   constructor(private readonly rideTypesService: RideTypesService) {}
 
   @Get('available')
-  @Throttle({ default: { limit: 60, ttl: 1000 } })
   @ApiOperation({
     summary: 'Obter tipos de corrida disponíveis',
     description:
@@ -219,7 +218,6 @@ export class RideTypesController {
   }
 
   @Post('calculate-price')
-  @Throttle({ default: { limit: 30, ttl: 10000 } }) // 30 requests por 10 segundos (mais distribuído)
   @ApiOperation({
     summary: 'Calcular preço para um tipo de corrida',
     description:

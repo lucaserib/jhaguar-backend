@@ -27,11 +27,13 @@ export class StripeService {
 
     this.isTestMode = stripeKey.includes('sk_test_');
     this.stripe = new Stripe(stripeKey, {
-      apiVersion: '2025-06-30.basil',
+      apiVersion: '2022-11-15',
     });
 
     this.logger.log(
-      `StripeService iniciado - Modo: ${this.isTestMode ? 'TESTE' : 'PRODUÇÃO'}`,
+      `StripeService iniciado - Modo: ${
+        this.isTestMode ? 'TESTE' : 'PRODUÇÃO'
+      }`,
     );
   }
 
@@ -75,7 +77,7 @@ export class StripeService {
       // Criar chave efêmera para o cliente
       const ephemeralKey = await this.stripe.ephemeralKeys.create(
         { customer: customer.id },
-        { apiVersion: '2024-12-18.acacia' },
+        { apiVersion: '2025-06-30.basil' },
       );
 
       this.logger.log(
@@ -101,20 +103,60 @@ export class StripeService {
       };
     } catch (error) {
       this.logger.error('Erro ao criar PaymentIntent:', error);
-      throw error;
+
+      // Tratar erros específicos do Stripe
+      if (error.type === 'StripeCardError') {
+        throw new BadRequestException(`Erro no cartão: ${error.message}`);
+      } else if (error.type === 'StripeInvalidRequestError') {
+        throw new BadRequestException(`Requisição inválida: ${error.message}`);
+      } else if (error.type === 'StripeAPIError') {
+        throw new BadRequestException(
+          `Erro na API do Stripe: ${error.message}`,
+        );
+      } else if (error.type === 'StripeConnectionError') {
+        throw new BadRequestException(
+          `Erro de conexão com Stripe: ${error.message}`,
+        );
+      } else if (error.type === 'StripeAuthenticationError') {
+        throw new BadRequestException(
+          `Erro de autenticação Stripe: ${error.message}`,
+        );
+      } else {
+        throw new BadRequestException(
+          error instanceof Error
+            ? error.message
+            : 'Erro desconhecido no Stripe',
+        );
+      }
     }
   }
 
   async confirmPayment(paymentIntentId: string, userId: string) {
     try {
       // Buscar o PaymentIntent no Stripe
-      const paymentIntent =
-        await this.stripe.paymentIntents.retrieve(paymentIntentId);
+      const paymentIntent = await this.stripe.paymentIntents.retrieve(
+        paymentIntentId,
+      );
 
-      if (paymentIntent.status !== 'succeeded') {
+      // Verificar se o pagamento foi processado com sucesso ou está processando
+      const validStatuses = ['succeeded', 'processing', 'requires_capture'];
+      if (!validStatuses.includes(paymentIntent.status)) {
         throw new BadRequestException(
           `Pagamento não foi bem-sucedido. Status: ${paymentIntent.status}`,
         );
+      }
+
+      // Se ainda está processando, aguardar um pouco
+      if (paymentIntent.status === 'processing') {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const updatedPaymentIntent = await this.stripe.paymentIntents.retrieve(
+          paymentIntentId,
+        );
+        if (!validStatuses.includes(updatedPaymentIntent.status)) {
+          throw new BadRequestException(
+            `Pagamento não foi concluído. Status final: ${updatedPaymentIntent.status}`,
+          );
+        }
       }
 
       // Processar a adição de saldo
@@ -123,7 +165,7 @@ export class StripeService {
       // Buscar usuário e carteira
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
-        include: { wallet: true },
+        include: { UserWallet: true },
       });
 
       if (!user) {
@@ -131,7 +173,7 @@ export class StripeService {
       }
 
       // Criar ou buscar carteira
-      let wallet = user.wallet;
+      let wallet = user.UserWallet;
       if (!wallet) {
         wallet = await this.prisma.userWallet.create({
           data: {
@@ -254,19 +296,19 @@ export class StripeService {
       switch (event.type) {
         case 'payment_intent.succeeded':
           await this.handlePaymentSuccess(
-            event.data.object as Stripe.PaymentIntent,
+            event.data.object as unknown as Stripe.PaymentIntent,
           );
           break;
 
         case 'payment_intent.payment_failed':
           await this.handlePaymentFailure(
-            event.data.object as Stripe.PaymentIntent,
+            event.data.object as unknown as Stripe.PaymentIntent,
           );
           break;
 
         case 'payment_intent.canceled':
           await this.handlePaymentCanceled(
-            event.data.object as Stripe.PaymentIntent,
+            event.data.object as unknown as Stripe.PaymentIntent,
           );
           break;
 
@@ -289,7 +331,7 @@ export class StripeService {
           stripePaymentIntentId: paymentIntent.id,
           status: 'PENDING',
         },
-        include: { wallet: true },
+        include: { UserWallet: true },
       });
 
       if (!transaction) {
@@ -311,11 +353,11 @@ export class StripeService {
       });
 
       // Atualizar saldo da carteira
-      if (transaction.wallet) {
+      if (transaction.UserWallet) {
         await this.prisma.userWallet.update({
-          where: { id: transaction.wallet.id },
+          where: { id: transaction.UserWallet.id },
           data: {
-            balance: transaction.wallet.balance + amount,
+            balance: transaction.UserWallet.balance + amount,
           },
         });
       }

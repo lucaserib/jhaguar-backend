@@ -14,27 +14,40 @@ import { Logger } from '@nestjs/common';
   cors: { origin: '*' },
   namespace: '/notifications',
 })
-export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class NotificationsGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer() server: Server;
-  private connectedUsers = new Map<string, { socketId: string; userId: string; userType: 'driver' | 'passenger' }>();
+  private connectedUsers = new Map<
+    string,
+    { socketId: string; userId: string; userType: 'driver' | 'passenger' }
+  >();
   private readonly logger = new Logger(NotificationsGateway.name);
 
   handleConnection(client: Socket) {
     const userId = this.extractUserId(client);
     const userType = this.extractUserType(client);
-    
-    this.logger.log(`User connected to notifications: ${client.id}, userId: ${userId}, type: ${userType}`);
-    
+
+    this.logger.log(
+      `User connected to notifications: ${client.id}, userId: ${userId}, type: ${userType}`,
+    );
+
     if (userId && userType) {
-      this.connectedUsers.set(client.id, { socketId: client.id, userId, userType });
+      this.connectedUsers.set(client.id, {
+        socketId: client.id,
+        userId,
+        userType,
+      });
       client.join(`user:${userId}`);
     }
   }
 
   handleDisconnect(client: Socket) {
     const userData = this.connectedUsers.get(client.id);
-    this.logger.log(`User disconnected from notifications: ${client.id}, userId: ${userData?.userId}`);
-    
+    this.logger.log(
+      `User disconnected from notifications: ${client.id}, userId: ${userData?.userId}`,
+    );
+
     if (userData) {
       client.leave(`user:${userData.userId}`);
       this.connectedUsers.delete(client.id);
@@ -46,10 +59,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { userId: string; userType: 'driver' | 'passenger' },
   ) {
-    this.logger.log(`User subscribing to notifications: ${data.userId}, type: ${data.userType}`);
+    this.logger.log(
+      `User subscribing to notifications: ${data.userId}, type: ${data.userType}`,
+    );
     client.join(`user:${data.userId}`);
     client.join(`type:${data.userType}`);
-    
+
     this.connectedUsers.set(client.id, {
       socketId: client.id,
       userId: data.userId,
@@ -108,7 +123,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     });
   }
 
-  notifyDriverArrived(passengerId: string, rideId: string, estimatedWaitTime?: number) {
+  notifyDriverArrived(
+    passengerId: string,
+    rideId: string,
+    estimatedWaitTime?: number,
+  ) {
     this.sendToUser(passengerId, 'ride:driver-arrived', {
       type: 'DRIVER_ARRIVED',
       rideId,
@@ -134,7 +153,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     });
   }
 
-  notifyRideCancelled(userId: string, rideId: string, reason: string, cancelledBy: 'driver' | 'passenger') {
+  notifyRideCancelled(
+    userId: string,
+    rideId: string,
+    reason: string,
+    cancelledBy: 'driver' | 'passenger',
+  ) {
     this.sendToUser(userId, 'ride:cancelled', {
       type: 'RIDE_CANCELLED',
       rideId,
@@ -152,7 +176,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     });
   }
 
-  notifyPaymentStatusChanged(userId: string, rideId: string, paymentStatus: string) {
+  notifyPaymentStatusChanged(
+    userId: string,
+    rideId: string,
+    paymentStatus: string,
+  ) {
     this.sendToUser(userId, 'payment:status-changed', {
       type: 'PAYMENT_STATUS_CHANGED',
       rideId,
@@ -187,23 +215,27 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   getConnectedDriversCount(): number {
-    return Array.from(this.connectedUsers.values())
-      .filter(user => user.userType === 'driver').length;
+    return Array.from(this.connectedUsers.values()).filter(
+      (user) => user.userType === 'driver',
+    ).length;
   }
 
   getConnectedPassengersCount(): number {
-    return Array.from(this.connectedUsers.values())
-      .filter(user => user.userType === 'passenger').length;
+    return Array.from(this.connectedUsers.values()).filter(
+      (user) => user.userType === 'passenger',
+    ).length;
   }
 
   isUserConnected(userId: string): boolean {
-    return Array.from(this.connectedUsers.values())
-      .some(user => user.userId === userId);
+    return Array.from(this.connectedUsers.values()).some(
+      (user) => user.userId === userId,
+    );
   }
 
   private extractUserId(client: Socket): string | null {
-    const token = client.handshake.auth?.token || client.handshake.headers?.authorization;
-    
+    const token =
+      client.handshake.auth?.token || client.handshake.headers?.authorization;
+
     if (!token) {
       this.logger.warn(`No token provided for socket ${client.id}`);
       return null;

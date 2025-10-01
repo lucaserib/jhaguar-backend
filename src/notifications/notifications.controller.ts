@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Post,
-  Body,
-  Param,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Post, Body, Param, UseGuards } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -25,20 +19,21 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @Post('drivers/:driverId/notify-passenger')
-  @ApiOperation({ 
+  @ApiOperation({
     summary: 'Notificar passageiro sobre atualização da corrida',
-    description: 'Permite que o motorista envie notificações para o passageiro sobre o status da corrida'
+    description:
+      'Permite que o motorista envie notificações para o passageiro sobre o status da corrida',
   })
   @ApiParam({ name: 'driverId', description: 'ID do motorista' })
-  @ApiResponse({ 
-    status: 200, 
+  @ApiResponse({
+    status: 200,
     description: 'Notificação enviada com sucesso',
     schema: {
       properties: {
         success: { type: 'boolean' },
-        message: { type: 'string' }
-      }
-    }
+        message: { type: 'string' },
+      },
+    },
   })
   @ApiResponse({ status: 404, description: 'Motorista não encontrado' })
   @ApiResponse({ status: 400, description: 'Dados inválidos' })
@@ -49,14 +44,18 @@ export class NotificationsController {
   ) {
     // Verificar se o usuário logado é o próprio motorista
     const authenticatedDriverId = user.driverId || user.id;
-    
+
     if (authenticatedDriverId !== driverId) {
       return {
         success: false,
-        message: 'Você não tem permissão para enviar notificações em nome deste motorista',
+        message:
+          'Você não tem permissão para enviar notificações em nome deste motorista',
       };
     }
 
-    return this.notificationsService.notifyPassenger(driverId, notifyPassengerDto);
+    return this.notificationsService.notifyPassenger(
+      driverId,
+      notifyPassengerDto,
+    );
   }
 }

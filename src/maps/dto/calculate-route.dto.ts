@@ -1,9 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsOptional,
-  ValidateNested,
-  IsArray,
-} from 'class-validator';
+import { IsOptional, ValidateNested, IsArray } from 'class-validator';
 import { Type } from 'class-transformer';
 import { LocationDto } from '../../common/dto';
 
@@ -108,7 +104,7 @@ export class RouteResponseDto {
     description: 'Limites geográficos da rota',
     example: {
       northeast: { latitude: -23.5505, longitude: -46.6333 },
-      southwest: { latitude: -23.5605, longitude: -46.6433 }
+      southwest: { latitude: -23.5605, longitude: -46.6433 },
     },
     required: false,
   })

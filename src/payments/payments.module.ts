@@ -7,6 +7,7 @@ import { RedisModule } from '../common/redis/redis.module';
 
 import { PaymentsController } from './payments.controller';
 import { FeeManagementController } from './fee-management.controller';
+import { PaymentsAdminController } from './admin.controller';
 
 import { PaymentsService } from './payments.service';
 import { FeeManagementService } from './fee-management.service';
@@ -17,7 +18,11 @@ import { BalanceValidationMiddleware } from './middleware/balance-validation.mid
 
 @Module({
   imports: [ConfigModule, ScheduleModule.forRoot(), RedisModule],
-  controllers: [PaymentsController, FeeManagementController],
+  controllers: [
+    PaymentsController,
+    FeeManagementController,
+    PaymentsAdminController,
+  ],
   providers: [
     PaymentsService,
     FeeManagementService,

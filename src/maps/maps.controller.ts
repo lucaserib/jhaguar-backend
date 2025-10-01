@@ -17,6 +17,7 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { MapsService } from './maps.service';
+import { RideTypesService } from '../ride-types/ride-types.service';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { User } from '../auth/decorator/user.decorator';
@@ -35,7 +36,10 @@ import { Gender } from '@prisma/client';
 @ApiTags('Maps & Localização')
 @Controller('maps')
 export class MapsController {
-  constructor(private readonly mapsService: MapsService) {}
+  constructor(
+    private readonly mapsService: MapsService,
+    private readonly rideTypesService: RideTypesService,
+  ) {}
 
   @Post('smart-recommendations')
   @UseGuards(JwtAuthGuard)
@@ -149,7 +153,6 @@ export class MapsController {
   }
 
   @Post('nearby-drivers')
-  @Throttle({ default: { limit: 200, ttl: 10000 } })
   @ApiOperation({
     summary: 'Buscar motoristas próximos',
     description:
@@ -237,7 +240,6 @@ export class MapsController {
   }
 
   @Post('calculate-route')
-  @Throttle({ default: { limit: 30, ttl: 10000 } }) // PRODUÇÃO: 30 requests per 10 seconds (equilibrado)
   @ApiOperation({
     summary: 'Calcular rota entre dois pontos',
     description:
@@ -266,7 +268,6 @@ export class MapsController {
   }
 
   @Post('calculate-price')
-  @Throttle({ default: { limit: 100, ttl: 1000 } })
   @ApiOperation({
     summary: 'Calcular preço para uma corrida',
     description: 'Calcula o preço estimado para uma corrida específica',
@@ -278,11 +279,23 @@ export class MapsController {
   })
   async calculatePrice(@Body() calculatePriceDto: CalculatePriceDto) {
     try {
-      const price = await this.mapsService.calculatePrice(calculatePriceDto);
+      // Usar o serviço centralizado de tipos de corrida para consistência
+      const price = await this.rideTypesService.calculateRidePrice({
+        rideTypeId: calculatePriceDto.rideTypeId,
+        distance: calculatePriceDto.distance,
+        duration: calculatePriceDto.duration,
+        surgeMultiplier: calculatePriceDto.surgeMultiplier || 1.0,
+        isPremiumTime: this.isPremiumTime(),
+      });
 
       return {
         success: true,
-        data: price,
+        data: {
+          estimatedPrice: price.finalPrice,
+          currency: price.currency,
+          breakdown: price.breakdown,
+          surgeMultiplier: price.surgeMultiplier,
+        },
         message: 'Preço calculado com sucesso',
       };
     } catch (error) {
@@ -291,6 +304,97 @@ export class MapsController {
         data: null,
         message:
           error instanceof Error ? error.message : 'Erro ao calcular preço',
+      };
+    }
+  }
+
+  @Post('estimate-ride')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Estimar preço e detalhes de corrida',
+    description:
+      'Calcula preço estimado, distância, duração e motoristas disponíveis para uma corrida específica',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Estimativa de corrida calculada com sucesso',
+  })
+  async estimateRide(
+    @Body()
+    estimateDto: {
+      origin: { latitude: number; longitude: number; address: string };
+      destination: { latitude: number; longitude: number; address: string };
+      rideTypeId: string;
+    },
+    @User() user: any,
+  ) {
+    try {
+      // 1. Calcular distância e duração da rota
+      const routeData = await this.mapsService.calculateRoute({
+        origin: estimateDto.origin,
+        destination: estimateDto.destination,
+      });
+
+      // 2. Buscar motoristas disponíveis
+      const availableDrivers =
+        await this.mapsService.findAvailableDriversForRideType(
+          estimateDto.origin,
+          estimateDto.rideTypeId,
+          user.id,
+          15, // 15km de raio
+          10, // máximo 10 motoristas
+        );
+
+      // 3. Calcular preço usando o serviço centralizado de tipos de corrida
+      const priceData = await this.rideTypesService.calculateRidePrice({
+        rideTypeId: estimateDto.rideTypeId,
+        distance: routeData.distance,
+        duration: routeData.duration,
+        surgeMultiplier: this.calculateCurrentSurge(
+          estimateDto.origin.latitude,
+          estimateDto.origin.longitude,
+        ),
+        isPremiumTime: this.isPremiumTime(),
+      });
+
+      return {
+        success: true,
+        data: {
+          estimatedPrice: priceData.finalPrice,
+          estimatedDistance: routeData.distance,
+          estimatedDuration: routeData.duration,
+          availableDrivers: availableDrivers.map((driver) => ({
+            id: driver.id,
+            latitude: driver.latitude,
+            longitude: driver.longitude,
+            title: `${driver.user.firstName} ${driver.user.lastName}`,
+            first_name: driver.user.firstName,
+            last_name: driver.user.lastName,
+            profile_image_url: driver.user.profileImage || '',
+            car_image_url: driver.vehicle?.carImageUrl || '',
+            car_seats: driver.vehicle?.capacity || 4,
+            rating: driver.averageRating || 4.5,
+            time: Math.round(driver.estimatedTime || 5),
+            price: priceData.finalPrice.toFixed(2),
+          })),
+          surgeMultiplier: priceData.surgeMultiplier,
+        },
+        message: 'Estimativa de corrida calculada com sucesso',
+      };
+    } catch (error) {
+      console.error('❌ Erro ao estimar corrida:', error);
+      return {
+        success: false,
+        data: {
+          estimatedPrice: 25.0,
+          estimatedDistance: 5000,
+          estimatedDuration: 600,
+          availableDrivers: [],
+          surgeMultiplier: 1.0,
+        },
+        message:
+          error instanceof Error ? error.message : 'Erro ao estimar corrida',
       };
     }
   }
@@ -318,16 +422,31 @@ export class MapsController {
     },
   ) {
     try {
-      // Esta funcionalidade já existe no RideTypesController,
-      // mas mantemos aqui para consistência da API de Maps
+      // Usar o serviço centralizado de tipos de corrida para calcular preços reais
       const comparisons = await Promise.allSettled(
         calculateDto.rideTypeIds.map(async (rideTypeId) => {
-          // Simular cálculo - na implementação real, chamaria o RideTypesService
-          return {
-            rideTypeId,
-            estimatedPrice: 15 + Math.random() * 20,
-            currency: 'BRL',
-          };
+          try {
+            const price = await this.rideTypesService.calculateRidePrice({
+              rideTypeId,
+              distance: calculateDto.distance,
+              duration: calculateDto.duration,
+              surgeMultiplier: calculateDto.surgeMultiplier || 1.0,
+              isPremiumTime: calculateDto.isPremiumTime || this.isPremiumTime(),
+            });
+
+            return {
+              rideTypeId,
+              estimatedPrice: price.finalPrice,
+              currency: price.currency,
+            };
+          } catch (error) {
+            // Fallback em caso de erro no cálculo de um tipo específico
+            return {
+              rideTypeId,
+              estimatedPrice: 15.0,
+              currency: 'BRL',
+            };
+          }
         }),
       );
 
@@ -389,7 +508,10 @@ export class MapsController {
     }
 
     try {
-      const address = await this.mapsService.reverseGeocode(latitude, longitude);
+      const address = await this.mapsService.reverseGeocode(
+        latitude,
+        longitude,
+      );
 
       return {
         success: true,
@@ -633,9 +755,7 @@ export class MapsController {
       },
     },
   })
-  async calculateRouteOptimized(
-    @Body() calculateRouteDto: CalculateRouteDto,
-  ) {
+  async calculateRouteOptimized(@Body() calculateRouteDto: CalculateRouteDto) {
     try {
       const route = await this.mapsService.calculateRouteNew(calculateRouteDto);
 
@@ -670,7 +790,8 @@ export class MapsController {
     }
 
     // Adicionar variação baseada em localização (simulada)
-    const locationFactor = Math.abs(Math.sin(latitude) * Math.cos(longitude)) * 0.3;
+    const locationFactor =
+      Math.abs(Math.sin(latitude) * Math.cos(longitude)) * 0.3;
     surge += locationFactor;
 
     return Math.round(Math.min(surge, 2.5) * 10) / 10;
@@ -694,6 +815,16 @@ export class MapsController {
     }
 
     return 'LOW';
+  }
+
+  private isPremiumTime(): boolean {
+    const hour = new Date().getHours();
+    const day = new Date().getDay();
+    const isWeekend = [0, 6].includes(day);
+    const isRushHour = (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
+
+    // Horários premium: rush hour em dias úteis ou noite de final de semana
+    return (isRushHour && !isWeekend) || (isWeekend && hour >= 20);
   }
 
   private getSpecialConditions(): string[] {

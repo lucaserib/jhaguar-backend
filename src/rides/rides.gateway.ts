@@ -35,7 +35,8 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(
       `🔑 Connection details: ${JSON.stringify({
         token: client.handshake.auth?.token ? '✅ Present' : '❌ Missing',
-        userType: client.handshake.auth?.userType || client.handshake.query.userType,
+        userType:
+          client.handshake.auth?.userType || client.handshake.query.userType,
         driverId: client.handshake.auth?.driverId,
         userId: client.handshake.auth?.userId,
       })}`,
@@ -50,9 +51,7 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(
         `✅ User registered: ${client.id} -> ${userId} (${userType})`,
       );
-      this.logger.log(
-        `👥 Total connected users: ${this.connectedUsers.size}`,
-      );
+      this.logger.log(`👥 Total connected users: ${this.connectedUsers.size}`);
     } else {
       this.logger.warn(
         `❌ Failed to register user: ${client.id} (userId: ${userId}, userType: ${userType})`,
@@ -85,7 +84,9 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Verificar quantos estão conectados agora
     const connectedSockets = this.server.sockets.adapter.rooms.get(room);
     const socketCount = connectedSockets ? connectedSockets.size : 0;
-    this.logger.log(`✅ User joined room ${room}. Total connected: ${socketCount} sockets`);
+    this.logger.log(
+      `✅ User joined room ${room}. Total connected: ${socketCount} sockets`,
+    );
 
     const userData = this.connectedUsers.get(client.id);
     if (userData) {
@@ -159,19 +160,25 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = `ride:${rideId}`;
     const connectedSockets = this.server.sockets.adapter.rooms.get(room);
     const socketCount = connectedSockets ? connectedSockets.size : 0;
-    
-    this.logger.log(`📡 Emitting ${event} to ride ${rideId} | Room: ${room} | Connected: ${socketCount} sockets`);
-    
+
+    this.logger.log(
+      `📡 Emitting ${event} to ride ${rideId} | Room: ${room} | Connected: ${socketCount} sockets`,
+    );
+
     if (socketCount === 0) {
-      this.logger.warn(`⚠️ No sockets connected to room ${room}! Event ${event} will not be received.`);
+      this.logger.warn(
+        `⚠️ No sockets connected to room ${room}! Event ${event} will not be received.`,
+      );
     }
-    
+
     this.server.to(room).emit(event, {
       ...data,
       timestamp: new Date(),
     });
-    
-    this.logger.log(`✅ Event ${event} emitted to ${socketCount} sockets in room ${room}`);
+
+    this.logger.log(
+      `✅ Event ${event} emitted to ${socketCount} sockets in room ${room}`,
+    );
   }
 
   emitRideStatusChanged(
@@ -202,14 +209,19 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       location,
       metadata,
     });
-    
+
     // Emitir também evento específico baseado no status
     if (status === 'driver_arrived') {
       this.emitDriverArrived(rideId, location || { latitude: 0, longitude: 0 });
     }
   }
 
-  emitRideAccepted(rideId: string, driverInfo: any, estimatedArrival?: number, ridePrice?: number) {
+  emitRideAccepted(
+    rideId: string,
+    driverInfo: any,
+    estimatedArrival?: number,
+    ridePrice?: number,
+  ) {
     this.emitToRide(rideId, 'ride:accepted', {
       rideId,
       driver: driverInfo,
@@ -261,6 +273,24 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  // 💬 Notificar ativação do chat
+  emitChatActivated(rideId: string) {
+    this.emitToRide(rideId, 'chat:activated', {
+      rideId,
+      message: 'Chat ativado! Você pode agora conversar durante a corrida.',
+    });
+    this.logger.log(`💬 Chat activation notification sent for ride ${rideId}`);
+  }
+
+  // 💬 Notificar desativação do chat
+  emitChatDeactivated(rideId: string) {
+    this.emitToRide(rideId, 'chat:deactivated', {
+      rideId,
+      message: 'Chat desativado.',
+    });
+    this.logger.log(`💬 Chat deactivation notification sent for ride ${rideId}`);
+  }
+
   emitPaymentStatusChanged(
     rideId: string,
     paymentStatus: string,
@@ -274,9 +304,7 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   broadcastRideRequest(ride: any, targetDriverIds: string[]) {
-    this.logger.log(
-      `🚀 🚨 BROADCASTING RIDE REQUEST - INÍCIO 🚨`,
-    );
+    this.logger.log(`🚀 🚨 BROADCASTING RIDE REQUEST - INÍCIO 🚨`);
     this.logger.log(
       `🎯 Ride ID: ${ride.id} | Target drivers: ${targetDriverIds.length}`,
     );
@@ -285,14 +313,12 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
 
     const allConnectedUsers = Array.from(this.connectedUsers.entries());
-    this.logger.log(
-      `👥 Total connected users: ${allConnectedUsers.length}`,
+    this.logger.log(`👥 Total connected users: ${allConnectedUsers.length}`);
+
+    const connectedDrivers = allConnectedUsers.filter(
+      ([_, userData]) => userData.userType === 'driver',
     );
-    
-    const connectedDrivers = allConnectedUsers.filter(([_, userData]) => userData.userType === 'driver');
-    this.logger.log(
-      `🚗 Connected drivers: ${connectedDrivers.length}`,
-    );
+    this.logger.log(`🚗 Connected drivers: ${connectedDrivers.length}`);
 
     // Log detalhado de todos os motoristas conectados
     connectedDrivers.forEach(([socketId, userData]) => {
@@ -301,7 +327,7 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
         `🚗 Driver conectado: ${userData.userId} (socket: ${socketId}) - ${isTarget ? '✅ TARGET' : '⚠️ NOT TARGET'}`,
       );
     });
-    
+
     // CORREÇÃO: Buscar motoristas específicos primeiro, depois fallback
     let connectedDriverSockets = allConnectedUsers
       .filter(
@@ -320,13 +346,13 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.warn(
         `⚠️ ZERO target drivers connected! Using FALLBACK: sending to ALL connected drivers`,
       );
-      
+
       connectedDriverSockets = connectedDrivers.map(([socketId]) => socketId);
-      
+
       this.logger.log(
         `🔄 FALLBACK: Sending to ${connectedDriverSockets.length} connected drivers`,
       );
-      
+
       if (connectedDriverSockets.length === 0) {
         this.logger.error(
           `❌ NO DRIVERS CONNECTED AT ALL! Cannot broadcast ride request.`,
@@ -344,8 +370,10 @@ export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`📨 🚨 SENDING RIDE REQUEST to socket: ${socketId}`);
       this.server.to(socketId).emit('new-ride-request', ride);
     });
-    
-    this.logger.log(`✅ 🚨 BROADCAST COMPLETED! Sent to ${connectedDriverSockets.length} drivers 🚨`);
+
+    this.logger.log(
+      `✅ 🚨 BROADCAST COMPLETED! Sent to ${connectedDriverSockets.length} drivers 🚨`,
+    );
   }
 
   broadcastRideRequestExpired(

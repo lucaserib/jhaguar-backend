@@ -92,10 +92,10 @@ export class NearbyDriver {
     example: {
       model: 'Civic',
       color: 'Preto',
-      licensePlate: 'ABC-1234'
+      licensePlate: 'ABC-1234',
     },
   })
-  vehicle: {
+  Vehicle: {
     model: string;
     color: string;
     licensePlate: string;

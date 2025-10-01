@@ -10,6 +10,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import * as bcrypt from 'bcrypt';
 import { Status } from '@prisma/client';
+import { PaymentsService } from '../payments/payments.service';
 
 @Injectable()
 export class AuthService {
@@ -18,6 +19,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -42,47 +44,67 @@ export class AuthService {
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
 
     // Usar transação para garantir consistência
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Criar usuário
-      const user = await tx.user.create({
-        data: {
-          email: registerDto.email,
-          phone: registerDto.phone,
-          firstName: registerDto.firstName,
-          lastName: registerDto.lastName,
-          password: hashedPassword,
-          gender: registerDto.gender,
-          dateOfBirth: registerDto.dateOfBirth,
-          profileImage: registerDto.profileImage,
-          address: registerDto.address,
-        },
-      });
-
-      // Criar perfil específico baseado no tipo
-      if (registerDto.userType === 'PASSENGER') {
-        const passenger = await tx.passenger.create({
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        // Criar usuário
+        const user = await tx.user.create({
           data: {
-            userId: user.id,
+            email: registerDto.email,
+            phone: registerDto.phone,
+            firstName: registerDto.firstName,
+            lastName: registerDto.lastName,
+            password: hashedPassword,
+            gender: registerDto.gender,
+            dateOfBirth: registerDto.dateOfBirth,
+            profileImage: registerDto.profileImage,
+            address: registerDto.address,
           },
         });
-        return { user, passenger, driver: null };
-      } else if (registerDto.userType === 'DRIVER') {
-        const driver = await tx.driver.create({
-          data: {
-            userId: user.id,
-            licenseNumber: `TEMP-${user.id.substring(0, 8)}`,
-            licenseExpiryDate: new Date(
-              new Date().setFullYear(new Date().getFullYear() + 1),
-            ),
-            accountStatus: Status.PENDING,
-            backgroundCheckStatus: Status.PENDING,
-          },
-        });
-        return { user, passenger: null, driver };
-      }
 
-      throw new Error('Tipo de usuário inválido');
-    });
+        // Criar perfil específico baseado no tipo
+        if (registerDto.userType === 'PASSENGER') {
+          const passenger = await tx.passenger.create({
+            data: {
+              userId: user.id,
+            },
+          });
+          return { user, passenger, driver: null };
+        } else if (registerDto.userType === 'DRIVER') {
+          const driver = await tx.driver.create({
+            data: {
+              userId: user.id,
+              licenseNumber: `TEMP-${user.id.substring(0, 8)}`,
+              licenseExpiryDate: new Date(
+                new Date().setFullYear(new Date().getFullYear() + 1),
+              ),
+              accountStatus: Status.PENDING,
+              backgroundCheckStatus: Status.PENDING,
+            },
+          });
+          return { user, passenger: null, driver };
+        }
+
+        throw new Error('Tipo de usuário inválido');
+      },
+      {
+        timeout: 10000, // Registration should be fast
+        isolationLevel: 'ReadCommitted',
+      },
+    );
+
+    // 🔥 NOVO: Criar carteira automaticamente para o novo usuário
+    try {
+      await this.paymentsService.getOrCreateWallet(result.user.id);
+      console.log(
+        `✅ Carteira criada automaticamente para usuário: ${result.user.email}`,
+      );
+    } catch (error) {
+      console.error(
+        `❌ Erro ao criar carteira para usuário ${result.user.email}:`,
+        error,
+      );
+      // Não falhar o registro por causa da carteira - ela será criada quando necessário
+    }
 
     return this.createTokenFromUser(result.user.id, result.user.email);
   }
@@ -111,8 +133,7 @@ export class AuthService {
   async updateDriverStatus(driverId: string, status: Status) {
     const driver = await this.prisma.driver.findUnique({
       where: { id: driverId },
-      include: {
-        user: {
+      include: { User: {
           select: {
             email: true,
             firstName: true,

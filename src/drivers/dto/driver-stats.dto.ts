@@ -55,7 +55,7 @@ export class DriverStatsResponseDto {
       count: 8,
     },
   })
-  ratings: {
+  Rating: {
     average: number;
     count: number;
   };

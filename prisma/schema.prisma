@@ -8,82 +8,117 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id           String     @id @default(uuid())
-  email        String     @unique
-  phone        String     @unique
-  firstName    String
-  lastName     String
-  password     String
-  gender       Gender
-  dateOfBirth  DateTime?
-  profileImage String?
-  address      String?
-  isVerified   Boolean    @default(false)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  deletedAt    DateTime?
-  driver       Driver?
-  passenger    Passenger?
-  ratings      Rating[]
+model ChatMessage {
+  id         String            @id @default(uuid())
+  chatId     String
+  senderId   String
+  senderType MessageSenderType
+  content    String
+  type       MessageType       @default(TEXT)
+  isRead     Boolean           @default(false)
+  readAt     DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  RideChat   RideChat          @relation(fields: [chatId], references: [id])
+  User       User              @relation(fields: [senderId], references: [id])
 
-  wallet      UserWallet?
-  Transaction Transaction[]
-}
-
-enum Gender {
-  MALE
-  FEMALE
-  OTHER
-  PREFER_NOT_TO_SAY
+  @@index([chatId])
+  @@index([createdAt])
+  @@index([isRead])
+  @@index([senderId])
 }
 
 model Driver {
-  id                    String           @id @default(uuid())
-  userId                String           @unique
-  licenseNumber         String           @unique
+  id                    String              @id @default(uuid())
+  userId                String              @unique
+  licenseNumber         String              @unique
   licenseExpiryDate     DateTime
-  isAvailable           Boolean          @default(false)
+  isAvailable           Boolean             @default(false)
   currentLatitude       Float?
   currentLongitude      Float?
-  lastLocationUpdate    DateTime?
-  averageRating         Float            @default(0)
-  totalRides            Int              @default(0)
-  accountStatus         Status           @default(PENDING)
-  backgroundCheckStatus Status           @default(PENDING)
+  averageRating         Float               @default(0)
+  totalRides            Int                 @default(0)
+  accountStatus         Status              @default(PENDING)
+  backgroundCheckStatus Status              @default(PENDING)
   backgroundCheckDate   DateTime?
-  isOnline              Boolean          @default(false)
-  isActiveTrip          Boolean          @default(false)
-  acceptsFemaleOnly     Boolean          @default(false)
-  isPetFriendly         Boolean          @default(false)
+  isOnline              Boolean             @default(false)
+  acceptsFemaleOnly     Boolean             @default(false)
   bankAccount           String?
-  user                  User             @relation(fields: [userId], references: [id])
-  vehicle               Vehicle?
-  rides                 Ride[]
-  documents             DriverDocument[]
-  driverRideTypes       DriverRideType[]
-  locations             DriverLocation[]
-  rideStatusHistory     RideStatusHistory[]
+  isActiveTrip          Boolean             @default(false)
+  lastLocationUpdate    DateTime?
+  isPetFriendly         Boolean             @default(false)
+  User                  User                @relation(fields: [userId], references: [id])
+  DriverDocument        DriverDocument[]
+  DriverLocation        DriverLocation[]
+  DriverRideType        DriverRideType[]
+  Ride                  Ride[]
+  RideStatusHistory     RideStatusHistory[]
+  Vehicle               Vehicle?
 
+  @@index([accountStatus])
   @@index([currentLatitude, currentLongitude])
   @@index([isOnline, isAvailable])
-  @@index([accountStatus])
 }
 
-enum Status {
-  PENDING
-  APPROVED
-  REJECTED
-  SUSPENDED
+model DriverDocument {
+  id               String       @id @default(uuid())
+  driverId         String
+  documentType     DocumentType
+  documentNumber   String?
+  issuedDate       DateTime?
+  expiryDate       DateTime?
+  isVerified       Boolean      @default(false)
+  verificationDate DateTime?
+  documentUrl      String
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  Driver           Driver       @relation(fields: [driverId], references: [id])
+
+  @@unique([driverId, documentType])
+}
+
+model DriverLocation {
+  id          String   @id @default(uuid())
+  driverId    String
+  latitude    Decimal  @db.Decimal(10, 8)
+  longitude   Decimal  @db.Decimal(11, 8)
+  heading     Decimal? @db.Decimal(5, 2)
+  speed       Decimal? @db.Decimal(5, 2)
+  accuracy    Decimal? @db.Decimal(5, 2)
+  isOnline    Boolean  @default(false)
+  isAvailable Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  Driver      Driver   @relation(fields: [driverId], references: [id])
+
+  @@index([createdAt])
+  @@index([driverId])
+  @@index([isOnline, isAvailable])
+  @@index([latitude, longitude])
+}
+
+model DriverRideType {
+  id             String         @id @default(uuid())
+  driverId       String
+  rideTypeId     String
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  Driver         Driver         @relation(fields: [driverId], references: [id])
+  RideTypeConfig RideTypeConfig @relation(fields: [rideTypeId], references: [id])
+
+  @@unique([driverId, rideTypeId])
+  @@index([driverId])
+  @@index([rideTypeId])
 }
 
 model Passenger {
-  id                  String  @id @default(uuid())
-  userId              String  @unique
-  prefersFemaleDriver Boolean @default(false)
-  totalRides          Int     @default(0)
-  averageRating       Float   @default(0)
-  specialNeeds        Boolean @default(false)
+  id                  String        @id @default(uuid())
+  userId              String        @unique
+  prefersFemaleDriver Boolean       @default(false)
+  totalRides          Int           @default(0)
+  averageRating       Float         @default(0)
+  specialNeeds        Boolean       @default(false)
   specialNeedsDesc    String?
   homeAddress         String?
   homeLatitude        Float?
@@ -91,109 +126,57 @@ model Passenger {
   workAddress         String?
   workLatitude        Float?
   workLongitude       Float?
-  user                User    @relation(fields: [userId], references: [id])
-  rides               Ride[]
-  rideRequests        RideRequest[]
+  User                User          @relation(fields: [userId], references: [id])
+  Ride                Ride[]
+  RideRequest         RideRequest[]
 }
 
-model Vehicle {
-  id                     String      @id @default(uuid())
-  driverId               String      @unique
-  make                   String
-  model                  String
-  year                   Int
-  color                  String
-  licensePlate           String      @unique
-  registrationExpiryDate DateTime
-  insuranceExpiryDate    DateTime
-  vehicleType            VehicleType
-  capacity               Int
-  accessibility          Boolean     @default(false)
-  carImageUrl            String?
-  features               String[]
-  inspectionStatus       Status      @default(PENDING)
-  inspectionDate         DateTime?
-  isArmored              Boolean     @default(false)
-  isLuxury               Boolean     @default(false)
-  isMotorcycle           Boolean     @default(false)
-  isPetFriendly          Boolean     @default(false)
-  deliveryCapable        Boolean     @default(false)
-  driver                 Driver      @relation(fields: [driverId], references: [id])
-  rides                  Ride[]
+model Payment {
+  id                     String        @id @default(uuid())
+  rideId                 String        @unique
+  amount                 Float
+  currency               String        @default("BRL")
+  status                 PaymentStatus @default(PENDING)
+  paymentIntentId        String?
+  stripeCustomerId       String?
+  receiptUrl             String?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  confirmedByDriver      Boolean       @default(false)
+  driverConfirmationTime DateTime?
+  driverNotes            String?
+  method                 PaymentMethod @default(CASH)
+  transactionId          String?
+  Ride                   Ride          @relation(fields: [rideId], references: [id])
+
+  @@index([method])
+  @@index([status])
 }
 
-enum VehicleType {
-  ECONOMY
-  COMFORT
-  LUXURY
-  SUV
-  VAN
-  MOTORCYCLE
-}
+model Rating {
+  id            String   @id @default(uuid())
+  rideId        String
+  ratedByUserId String
+  ratedUserId   String
+  rating        Float
+  review        String?
+  cleanliness   Float?
+  drivingSkill  Float?
+  courtesy      Float?
+  createdAt     DateTime @default(now())
+  User          User     @relation(fields: [ratedByUserId], references: [id])
+  Ride          Ride     @relation(fields: [rideId], references: [id])
 
-enum RideTypeEnum {
-  NORMAL
-  EXECUTIVO
-  BLINDADO
-  PET
-  MULHER
-  DELIVERY
-  MOTO
-}
-
-model RideTypeConfig {
-  id                  String           @id @default(uuid())
-  type                RideTypeEnum     @unique
-  name                String
-  description         String
-  icon                String
-  isActive            Boolean          @default(true)
-  femaleOnly          Boolean          @default(false)
-  requiresArmored     Boolean          @default(false)
-  requiresPetFriendly Boolean          @default(false)
-  allowMotorcycle     Boolean          @default(false)
-  isDeliveryOnly      Boolean          @default(false)
-  vehicleTypes        VehicleType[]
-  basePrice           Float
-  pricePerKm          Float
-  pricePerMin         Float
-  surgeMultiplier     Float            @default(1.0)
-  minimumPrice        Float
-  maxDistance         Int?
-  minDistance         Int?
-  priority            Int              @default(0)
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-  rides               Ride[]
-  driverSupport       DriverRideType[]
-  rideRequests        RideRequest[]
-
-  @@index([type])
-  @@index([isActive])
-  @@index([priority])
-}
-
-model DriverRideType {
-  id         String         @id @default(uuid())
-  driverId   String
-  rideTypeId String
-  isActive   Boolean        @default(true)
-  createdAt  DateTime       @default(now())
-  driver     Driver         @relation(fields: [driverId], references: [id])
-  rideType   RideTypeConfig @relation(fields: [rideTypeId], references: [id])
-
-  @@unique([driverId, rideTypeId])
-  @@index([driverId])
-  @@index([rideTypeId])
+  @@unique([rideId, ratedByUserId, ratedUserId])
 }
 
 model Ride {
-  id                   String          @id @default(uuid())
+  id                   String              @id @default(uuid())
   passengerId          String
   driverId             String?
   vehicleId            String?
-  status               RideStatus      @default(REQUESTED)
-  requestTime          DateTime        @default(now())
+  status               RideStatus          @default(REQUESTED)
+  requestTime          DateTime            @default(now())
   acceptTime           DateTime?
   pickupTime           DateTime?
   dropOffTime          DateTime?
@@ -209,178 +192,51 @@ model Ride {
   actualDistance       Float?
   basePrice            Float
   finalPrice           Float?
-  currency             String          @default("BRL")
-  paymentStatus        PaymentStatus   @default(PENDING)
+  currency             String              @default("BRL")
+  paymentStatus        PaymentStatus       @default(PENDING)
   paymentMethodId      String?
   cancellationReason   String?
   cancellationTime     DateTime?
   cancellationFee      Float?
-  isFemaleOnlyRide     Boolean         @default(false)
-  hasPets              Boolean         @default(false)
-  petDescription       String?
+  isFemaleOnlyRide     Boolean             @default(false)
   specialRequirements  String?
-  baggageQuantity      Int             @default(0)
+  baggageQuantity      Int                 @default(0)
   scheduledTime        DateTime?
-  rideTypeConfigId     String?
-  isDelivery           Boolean         @default(false)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
   deliveryInstructions String?
-  passenger            Passenger       @relation(fields: [passengerId], references: [id])
-  driver               Driver?         @relation(fields: [driverId], references: [id])
-  vehicle              Vehicle?        @relation(fields: [vehicleId], references: [id])
-  ratings              Rating[]
-  payment              Payment?
-  locations            RideLocation[]
-  statusHistory        RideStatusHistory[]
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
-  RideTypeConfig       RideTypeConfig? @relation(fields: [rideTypeConfigId], references: [id])
+  isDelivery           Boolean             @default(false)
+  rideTypeConfigId     String?
+  hasPets              Boolean             @default(false)
+  petDescription       String?
+  Payment              Payment?
+  Rating               Rating[]
+  Driver               Driver?             @relation(fields: [driverId], references: [id])
+  Passenger            Passenger           @relation(fields: [passengerId], references: [id])
+  RideTypeConfig       RideTypeConfig?     @relation(fields: [rideTypeConfigId], references: [id])
+  Vehicle              Vehicle?            @relation(fields: [vehicleId], references: [id])
+  RideChat             RideChat?
+  RideLocation         RideLocation[]
+  RideStatusHistory    RideStatusHistory[]
+  Transaction          Transaction[]
 
-  Transaction Transaction[]
-
-  @@index([status])
-  @@index([passengerId])
   @@index([driverId])
+  @@index([passengerId])
   @@index([rideTypeConfigId])
-}
-
-enum RideStatus {
-  REQUESTED
-  ACCEPTED
-  REJECTED
-  CANCELLED
-  IN_PROGRESS
-  COMPLETED
-}
-
-enum PaymentStatus {
-  PENDING
-  PAID
-  FAILED
-  REFUNDED
-}
-
-model Payment {
-  id       String        @id @default(uuid())
-  rideId   String        @unique
-  amount   Float
-  currency String        @default("BRL")
-  method   PaymentMethod @default(CASH) // NOVO CAMPO
-  status   PaymentStatus @default(PENDING)
-
-  // Dados do Stripe (quando aplicável)
-  paymentIntentId  String?
-  stripeCustomerId String?
-  receiptUrl       String?
-
-  // NOVOS CAMPOS para confirmação presencial
-  confirmedByDriver      Boolean   @default(false)
-  driverConfirmationTime DateTime?
-  driverNotes            String?
-
-  // Dados da transação de carteira (quando aplicável)
-  transactionId String?
-
-  ride      Ride     @relation(fields: [rideId], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([method])
   @@index([status])
 }
 
-enum PaymentMethod {
-  CASH
-  PIX
-  CARD_MACHINE
-  WALLET_BALANCE
-  CREDIT_CARD
-  DEBIT_CARD
-  PIX_WALLET
-}
+model RideChat {
+  id          String        @id @default(uuid())
+  rideId      String        @unique
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  ChatMessage ChatMessage[]
+  Ride        Ride          @relation(fields: [rideId], references: [id])
 
-enum TransactionType {
-  WALLET_TOPUP
-  RIDE_PAYMENT
-  REFUND
-  WITHDRAWAL
-  CANCELLATION_FEE
-}
-
-enum TransactionStatus {
-  PENDING
-  COMPLETED
-  FAILED
-  CANCELLLED
-  REFUNDED
-}
-
-model UserWallet {
-  id          String   @id @default(uuid())
-  userId      String   @unique
-  balance     Float    @default(0.00)
-  currency    String   @default("BRL")
-  isBlocked   Boolean  @default(false)
-  blockReason String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  user         User          @relation(fields: [userId], references: [id])
-  transactions Transaction[]
-
-  @@index([userId])
-}
-
-model Transaction {
-  id          String            @id @default(uuid())
-  walletId    String?
-  userId      String
-  rideId      String?
-  type        TransactionType
-  status      TransactionStatus @default(PENDING)
-  amount      Float
-  currency    String            @default("BRL")
-  description String
-
-  // Dados do Stripe
-  stripePaymentIntentId String?
-  stripeChargeId        String?
-  stripeCustomerId      String?
-
-  // Metadados
-  metadata      Json?
-  failureReason String?
-  processedAt   DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  wallet UserWallet? @relation(fields: [walletId], references: [id])
-  user   User        @relation(fields: [userId], references: [id])
-  ride   Ride?       @relation(fields: [rideId], references: [id])
-
-  @@index([userId])
-  @@index([walletId])
+  @@index([isActive])
   @@index([rideId])
-  @@index([type])
-  @@index([status])
-  @@index([createdAt])
-}
-
-model Rating {
-  id            String   @id @default(uuid())
-  rideId        String
-  ratedByUserId String
-  ratedUserId   String
-  rating        Float
-  review        String?
-  cleanliness   Float?
-  drivingSkill  Float?
-  courtesy      Float?
-  ride          Ride     @relation(fields: [rideId], references: [id])
-  ratedBy       User     @relation(fields: [ratedByUserId], references: [id])
-  createdAt     DateTime @default(now())
-
-  @@unique([rideId, ratedByUserId, ratedUserId])
 }
 
 model RideLocation {
@@ -393,65 +249,9 @@ model RideLocation {
   bearing   Float?
   accuracy  Float?
   userType  UserType
-  ride      Ride     @relation(fields: [rideId], references: [id])
+  Ride      Ride     @relation(fields: [rideId], references: [id])
 
   @@index([rideId, timestamp])
-}
-
-enum UserType {
-  DRIVER
-  PASSENGER
-}
-
-model DriverDocument {
-  id               String       @id @default(uuid())
-  driverId         String
-  documentType     DocumentType
-  documentNumber   String?
-  issuedDate       DateTime?
-  expiryDate       DateTime?
-  isVerified       Boolean      @default(false)
-  verificationDate DateTime?
-  documentUrl      String
-  notes            String?
-  driver           Driver       @relation(fields: [driverId], references: [id])
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-
-  @@unique([driverId, documentType])
-}
-
-enum DocumentType {
-  DRIVERS_LICENSE
-  VEHICLE_REGISTRATION
-  VEHICLE_INSURANCE
-  BACKGROUND_CHECK
-  PROFILE_PHOTO
-  ARMORED_VEHICLE_CERTIFICATE
-  MOTORCYCLE_LICENSE
-  PET_TRANSPORT_CERTIFICATE
-  OTHER
-}
-
-model DriverLocation {
-  id           String   @id @default(uuid())
-  driverId     String
-  latitude     Decimal  @db.Decimal(10, 8)
-  longitude    Decimal  @db.Decimal(11, 8)
-  heading      Decimal? @db.Decimal(5, 2)
-  speed        Decimal? @db.Decimal(5, 2)
-  accuracy     Decimal? @db.Decimal(5, 2)
-  isOnline     Boolean  @default(false)
-  isAvailable  Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  driver Driver @relation(fields: [driverId], references: [id])
-
-  @@index([driverId])
-  @@index([latitude, longitude])
-  @@index([isOnline, isAvailable])
-  @@index([createdAt])
 }
 
 model RideRequest {
@@ -471,22 +271,14 @@ model RideRequest {
   requestedAt          DateTime          @default(now())
   expiresAt            DateTime
   updatedAt            DateTime          @updatedAt
+  Passenger            Passenger         @relation(fields: [passengerId], references: [id])
+  RideTypeConfig       RideTypeConfig    @relation(fields: [rideTypeId], references: [id])
 
-  passenger   Passenger       @relation(fields: [passengerId], references: [id])
-  rideType    RideTypeConfig  @relation(fields: [rideTypeId], references: [id])
-
-  @@index([status])
-  @@index([passengerId])
-  @@index([rideTypeId])
   @@index([expiresAt])
+  @@index([passengerId])
   @@index([pickupLatitude, pickupLongitude])
-}
-
-enum RideRequestStatus {
-  PENDING
-  ACCEPTED
-  REJECTED
-  EXPIRED
+  @@index([rideTypeId])
+  @@index([status])
 }
 
 model RideStatusHistory {
@@ -499,11 +291,247 @@ model RideStatusHistory {
   locationLongitude Decimal? @db.Decimal(11, 8)
   notes             String?
   changedAt         DateTime @default(now())
+  Driver            Driver   @relation(fields: [driverId], references: [id])
+  Ride              Ride     @relation(fields: [rideId], references: [id])
 
-  ride   Ride   @relation(fields: [rideId], references: [id])
-  driver Driver @relation(fields: [driverId], references: [id])
-
-  @@index([rideId])
-  @@index([driverId])
   @@index([changedAt])
+  @@index([driverId])
+  @@index([rideId])
+}
+
+model RideTypeConfig {
+  id                  String           @id @default(uuid())
+  type                RideTypeEnum     @unique
+  name                String
+  description         String
+  icon                String
+  isActive            Boolean          @default(true)
+  femaleOnly          Boolean          @default(false)
+  requiresArmored     Boolean          @default(false)
+  vehicleTypes        VehicleType[]
+  basePrice           Float
+  pricePerKm          Float
+  pricePerMin         Float
+  surgeMultiplier     Float            @default(1.0)
+  minimumPrice        Float
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  allowMotorcycle     Boolean          @default(false)
+  isDeliveryOnly      Boolean          @default(false)
+  maxDistance         Int?
+  minDistance         Int?
+  priority            Int              @default(0)
+  requiresPetFriendly Boolean          @default(false)
+  DriverRideType      DriverRideType[]
+  Ride                Ride[]
+  RideRequest         RideRequest[]
+
+  @@index([isActive])
+  @@index([priority])
+  @@index([type])
+}
+
+model Transaction {
+  id                    String            @id @default(uuid())
+  walletId              String?
+  userId                String
+  rideId                String?
+  type                  TransactionType
+  status                TransactionStatus @default(PENDING)
+  amount                Float
+  currency              String            @default("BRL")
+  description           String
+  stripePaymentIntentId String?
+  stripeChargeId        String?
+  stripeCustomerId      String?
+  metadata              Json?
+  failureReason         String?
+  processedAt           DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  Ride                  Ride?             @relation(fields: [rideId], references: [id])
+  User                  User              @relation(fields: [userId], references: [id])
+  UserWallet            UserWallet?       @relation(fields: [walletId], references: [id])
+
+  @@index([createdAt])
+  @@index([rideId])
+  @@index([status])
+  @@index([type])
+  @@index([userId])
+  @@index([walletId])
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  phone        String        @unique
+  firstName    String
+  lastName     String
+  password     String
+  gender       Gender
+  dateOfBirth  DateTime?
+  profileImage String?
+  address      String?
+  isVerified   Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+  ChatMessage  ChatMessage[]
+  Driver       Driver?
+  Passenger    Passenger?
+  Rating       Rating[]
+  Transaction  Transaction[]
+  UserWallet   UserWallet?
+}
+
+model UserWallet {
+  id          String        @id @default(uuid())
+  userId      String        @unique
+  balance     Float         @default(0.00)
+  currency    String        @default("BRL")
+  isBlocked   Boolean       @default(false)
+  blockReason String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  Transaction Transaction[]
+  User        User          @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Vehicle {
+  id                     String      @id @default(uuid())
+  driverId               String      @unique
+  make                   String
+  model                  String
+  year                   Int
+  color                  String
+  licensePlate           String      @unique
+  registrationExpiryDate DateTime
+  insuranceExpiryDate    DateTime
+  vehicleType            VehicleType
+  capacity               Int
+  accessibility          Boolean     @default(false)
+  carImageUrl            String?
+  features               String[]
+  inspectionStatus       Status      @default(PENDING)
+  inspectionDate         DateTime?
+  deliveryCapable        Boolean     @default(false)
+  isArmored              Boolean     @default(false)
+  isLuxury               Boolean     @default(false)
+  isMotorcycle           Boolean     @default(false)
+  isPetFriendly          Boolean     @default(false)
+  Ride                   Ride[]
+  Driver                 Driver      @relation(fields: [driverId], references: [id])
+}
+
+enum DocumentType {
+  DRIVERS_LICENSE
+  VEHICLE_REGISTRATION
+  VEHICLE_INSURANCE
+  BACKGROUND_CHECK
+  PROFILE_PHOTO
+  OTHER
+  ARMORED_VEHICLE_CERTIFICATE
+  MOTORCYCLE_LICENSE
+  PET_TRANSPORT_CERTIFICATE
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum MessageSenderType {
+  DRIVER
+  PASSENGER
+}
+
+enum MessageType {
+  TEXT
+  LOCATION
+  IMAGE
+  AUDIO
+}
+
+enum PaymentMethod {
+  CASH
+  PIX
+  CARD_MACHINE
+  WALLET_BALANCE
+  CREDIT_CARD
+  DEBIT_CARD
+  PIX_WALLET
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum RideRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum RideStatus {
+  REQUESTED
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum RideTypeEnum {
+  NORMAL
+  EXECUTIVO
+  BLINDADO
+  PET
+  MULHER
+  DELIVERY
+  MOTO
+}
+
+enum Status {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLLED
+  REFUNDED
+}
+
+enum TransactionType {
+  WALLET_TOPUP
+  RIDE_PAYMENT
+  REFUND
+  WITHDRAWAL
+  CANCELLATION_FEE
+}
+
+enum UserType {
+  DRIVER
+  PASSENGER
+}
+
+enum VehicleType {
+  ECONOMY
+  COMFORT
+  LUXURY
+  SUV
+  VAN
+  MOTORCYCLE
 }

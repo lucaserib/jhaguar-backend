@@ -10,7 +10,7 @@ export class NotificationsService {
 
   async sendDriverApplicationNotification(driverData: any) {
     this.logger.log(
-      `[EMAIL] Nova solicitação de motorista: ${driverData.user.firstName} ${driverData.user.lastName} (${driverData.user.email})`,
+      `[EMAIL] Nova solicitação de motorista: ${driverData.User.firstName} ${driverData.User.lastName} (${driverData.User.email})`,
     );
 
     this.logger.log(`Assunto: Nova solicitação de motorista`);
@@ -20,10 +20,10 @@ export class NotificationsService {
     );
     this.logger.log(`Detalhes do motorista:`);
     this.logger.log(
-      `- Nome: ${driverData.user.firstName} ${driverData.user.lastName}`,
+      `- Nome: ${driverData.User.firstName} ${driverData.User.lastName}`,
     );
-    this.logger.log(`- Email: ${driverData.user.email}`);
-    this.logger.log(`- Telefone: ${driverData.user.phone}`);
+    this.logger.log(`- Email: ${driverData.User.email}`);
+    this.logger.log(`- Telefone: ${driverData.User.phone}`);
     this.logger.log(`- Número da licença: ${driverData.licenseNumber}`);
     this.logger.log(
       `- Data de expiração da licença: ${driverData.licenseExpiryDate}`,
@@ -34,11 +34,11 @@ export class NotificationsService {
 
   async sendDriverStatusUpdateNotification(driverData: any, status: string) {
     this.logger.log(
-      `[EMAIL] Status do motorista atualizado: ${driverData.user.firstName} ${driverData.user.lastName} -> ${status}`,
+      `[EMAIL] Status do motorista atualizado: ${driverData.User.firstName} ${driverData.User.lastName} -> ${status}`,
     );
 
     this.logger.log(`Assunto: Atualização de status de motorista`);
-    this.logger.log(`Para: ${driverData.user.email}`);
+    this.logger.log(`Para: ${driverData.User.email}`);
     this.logger.log(
       `Conteúdo: Seu status como motorista foi atualizado para: ${status}`,
     );

@@ -22,6 +22,7 @@ export interface VehicleInfo {
   isLuxury?: boolean;
   isMotorcycle?: boolean;
   deliveryCapable?: boolean;
+  capacity?: number;
 }
 
 export interface UserInfo {

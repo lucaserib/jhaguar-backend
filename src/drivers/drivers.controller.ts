@@ -24,7 +24,6 @@ import { Status } from '@prisma/client';
 import { User } from '../auth/decorator/user.decorator';
 import { UpdateDriverStatusDto } from './dto/update-driver-status.dto';
 import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
-import { LocationUpdateDto } from './dto/location-update.dto';
 import { UpdateAvailabilityDto } from './dto/update-availability.dto';
 import { DriverStatsDto, DriverStatsResponseDto } from './dto/driver-stats.dto';
 
@@ -169,7 +168,6 @@ export class DriversController {
   @Patch(':driverId/availability')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @Throttle({ default: { limit: 5, ttl: 10000 } }) // 5 requests per 10 seconds for availability updates
   @ApiOperation({ summary: 'Atualizar disponibilidade do motorista' })
   @ApiResponse({
     status: 200,
@@ -200,33 +198,31 @@ export class DriversController {
     );
   }
 
-  @Patch('location')
+  @Patch(':driverId/location')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @Throttle({ default: { limit: 1, ttl: 1000 } }) // 1 request per second
-  @ApiOperation({ summary: 'Atualizar localização do motorista' })
+  @ApiOperation({ summary: 'Atualizar localização do motorista específico' })
   @ApiResponse({
     status: 200,
     description: 'Localização atualizada com sucesso',
     schema: {
       properties: {
-        success: { type: 'boolean' },
-        message: { type: 'string' },
+        id: { type: 'string' },
+        latitude: { type: 'number' },
+        longitude: { type: 'number' },
+        isAvailable: { type: 'boolean' },
+        isOnline: { type: 'boolean' },
       },
     },
   })
   @ApiResponse({ status: 404, description: 'Motorista não encontrado' })
-  @ApiResponse({ status: 429, description: 'Rate limit excedido' })
-  async updateLocationNew(
-    @Body() locationUpdateDto: LocationUpdateDto,
-    @User() user: any,
+  async updateDriverLocation(
+    @Param('driverId') driverId: string,
+    @Body() updateLocationDto: UpdateDriverLocationDto,
   ) {
-    const driverId = user.driverId || user.id; // fallback
-    return this.driversService.updateLocationWithCache(
-      driverId,
-      locationUpdateDto,
-    );
+    return this.driversService.updateLocation(driverId, updateLocationDto);
   }
+
 
   @Get(':driverId/stats')
   @UseGuards(JwtAuthGuard)
@@ -249,5 +245,44 @@ export class DriversController {
     @Query() statsQuery: DriverStatsDto,
   ) {
     return this.driversService.getDriverStats(driverId, statsQuery.period);
+  }
+
+  @Get('debug/online-status')
+  @ApiOperation({ summary: 'Debug: Verificar status de motoristas online' })
+  @ApiResponse({
+    status: 200,
+    description: 'Status dos motoristas retornado com sucesso',
+    schema: {
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            totalDrivers: { type: 'number' },
+            onlineDrivers: { type: 'number' },
+            availableDrivers: { type: 'number' },
+            approvedDrivers: { type: 'number' },
+            drivers: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  isOnline: { type: 'boolean' },
+                  isAvailable: { type: 'boolean' },
+                  accountStatus: { type: 'string' },
+                  hasLocation: { type: 'boolean' },
+                  rideTypes: { type: 'array' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  async debugOnlineStatus() {
+    return this.driversService.debugOnlineStatus();
   }
 }

@@ -1,5 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, ValidateNested, IsOptional, IsNotEmpty } from 'class-validator';
+import {
+  IsDateString,
+  ValidateNested,
+  IsOptional,
+  IsNotEmpty,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { LocationDto } from '../../common/dto/location.dto';
 
@@ -29,7 +34,10 @@ export class StartRideDto {
     example: '2024-08-06T18:20:00.000Z',
   })
   @IsNotEmpty({ message: 'startedAt is required' })
-  @IsDateString({}, { message: 'startedAt must be a valid ISO 8601 date string' })
+  @IsDateString(
+    {},
+    { message: 'startedAt must be a valid ISO 8601 date string' },
+  )
   startedAt: string; // CORREÇÃO: Simplificar - deixar apenas IsDateString fazer a validação
 
   @ApiProperty({

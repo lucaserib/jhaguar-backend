@@ -111,52 +111,58 @@ export class AutoChargeInterceptor implements NestInterceptor {
     pendingFees: any[],
     totalAmount: number,
   ): Promise<void> {
-    return await this.prisma.$transaction(async (prisma) => {
-      // Buscar carteira atualizada
-      const wallet = await this.paymentsService.getOrCreateWallet(userId);
+    return await this.prisma.$transaction(
+      async (prisma) => {
+        // Buscar carteira atualizada
+        const wallet = await this.paymentsService.getOrCreateWallet(userId);
 
-      // Verificar saldo mais uma vez (pode ter mudado)
-      if (wallet.balance < totalAmount) {
-        throw new Error('Saldo insuficiente após verificação final');
-      }
+        // Verificar saldo mais uma vez (pode ter mudado)
+        if (wallet.balance < totalAmount) {
+          throw new Error('Saldo insuficiente após verificação final');
+        }
 
-      // Debitar saldo
-      const updatedWallet = await prisma.userWallet.update({
-        where: { id: wallet.id },
-        data: {
-          balance: wallet.balance - totalAmount,
-        },
-      });
-
-      // Marcar todas as taxas como pagas
-      await prisma.transaction.updateMany({
-        where: {
-          id: { in: pendingFees.map((fee) => fee.id) },
-        },
-        data: {
-          status: 'COMPLETED',
-          processedAt: new Date(),
-          metadata: {
-            autoCharged: true,
-            autoChargedOnTopup: true,
-            originalBalance: wallet.balance,
-            newBalance: updatedWallet.balance,
-            chargedAt: new Date(),
+        // Debitar saldo
+        const updatedWallet = await prisma.userWallet.update({
+          where: { id: wallet.id },
+          data: {
+            balance: wallet.balance - totalAmount,
           },
-        },
-      });
+        });
 
-      this.logger.log(
-        `💳 Cobrança automática realizada: R$ ${totalAmount.toFixed(2)} (${pendingFees.length} taxas) - Usuário: ${userId}. Novo saldo: R$ ${updatedWallet.balance.toFixed(2)}`,
-      );
+        // Marcar todas as taxas como pagas
+        await prisma.transaction.updateMany({
+          where: {
+            id: { in: pendingFees.map((fee) => fee.id) },
+          },
+          data: {
+            status: 'COMPLETED',
+            processedAt: new Date(),
+            metadata: {
+              autoCharged: true,
+              autoChargedOnTopup: true,
+              originalBalance: wallet.balance,
+              newBalance: updatedWallet.balance,
+              chargedAt: new Date(),
+            },
+          },
+        });
 
-      // Opcional: Criar notificação para o usuário
-      await this.createAutoChargeNotification(
-        userId,
-        totalAmount,
-        pendingFees.length,
-      );
-    });
+        this.logger.log(
+          `💳 Cobrança automática realizada: R$ ${totalAmount.toFixed(2)} (${pendingFees.length} taxas) - Usuário: ${userId}. Novo saldo: R$ ${updatedWallet.balance.toFixed(2)}`,
+        );
+
+        // Opcional: Criar notificação para o usuário
+        await this.createAutoChargeNotification(
+          userId,
+          totalAmount,
+          pendingFees.length,
+        );
+      },
+      {
+        timeout: 15000, // Reduced timeout for auto-charge
+        isolationLevel: 'ReadCommitted',
+      },
+    );
   }
 
   private async createAutoChargeNotification(

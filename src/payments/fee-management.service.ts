@@ -6,6 +6,7 @@ import { PaymentsService } from './payments.service';
 @Injectable()
 export class FeeManagementService {
   private readonly logger = new Logger(FeeManagementService.name);
+  private readonly DRIVER_NEGATIVE_BALANCE_LIMIT = -15.0; // -R$15,00
 
   constructor(
     private readonly prisma: PrismaService,
@@ -97,65 +98,76 @@ export class FeeManagementService {
     totalAmount: number,
     feeCount: number,
   ): Promise<{ success: boolean; message: string; data?: any }> {
-    return await this.prisma.$transaction(async (prisma) => {
-      // Verificar saldo do motorista
-      const wallet = await this.paymentsService.getOrCreateWallet(userId);
+    return await this.prisma.$transaction(
+      async (prisma) => {
+        // Verificar saldo do motorista
+        const wallet = await this.paymentsService.getOrCreateWallet(userId);
 
-      if (wallet.balance < totalAmount) {
-        // Se não tem saldo suficiente, criar uma transação de débito negativo
-        // que será cobrada quando ele adicionar saldo
-        await this.createNegativeBalanceEntry(userId, totalAmount, feeCount);
+        const newBalance = wallet.balance - totalAmount;
+
+        if (newBalance < this.DRIVER_NEGATIVE_BALANCE_LIMIT) {
+          // Se ultrapassar limite negativo, criar débito pendente
+          this.logger.warn(
+            `⚠️ Cobrança automática excederia limite negativo. Usuário ${userId}: Saldo R$ ${wallet.balance}, Taxa R$ ${totalAmount}, Limite: R$ ${this.DRIVER_NEGATIVE_BALANCE_LIMIT}`,
+          );
+
+          await this.createNegativeBalanceEntry(userId, totalAmount, feeCount);
+
+          return {
+            success: false,
+            message: `Saldo insuficiente - limite de R$ ${this.DRIVER_NEGATIVE_BALANCE_LIMIT} seria ultrapassado`,
+          };
+        }
+
+        // Buscar taxas pendentes
+        const pendingFees = await prisma.transaction.findMany({
+          where: {
+            userId,
+            type: 'CANCELLATION_FEE',
+            status: 'PENDING',
+            amount: { lt: 0 },
+          },
+        });
+
+        // Debitar saldo (permitindo negativo até o limite)
+        await prisma.userWallet.update({
+          where: { id: wallet.id },
+          data: {
+            balance: newBalance,
+          },
+        });
+
+        // Marcar taxas como pagas
+        await prisma.transaction.updateMany({
+          where: {
+            id: { in: pendingFees.map((fee) => fee.id) },
+          },
+          data: {
+            status: 'COMPLETED',
+            processedAt: new Date(),
+            metadata: {
+              autoCharged: true,
+              chargedAt: new Date(),
+              originalBalance: wallet.balance,
+            },
+          },
+        });
 
         return {
-          success: false,
-          message: `Saldo insuficiente - criado débito negativo de R$ ${totalAmount.toFixed(2)}`,
-        };
-      }
-
-      // Buscar taxas pendentes
-      const pendingFees = await prisma.transaction.findMany({
-        where: {
-          userId,
-          type: 'CANCELLATION_FEE',
-          status: 'PENDING',
-          amount: { lt: 0 },
-        },
-      });
-
-      // Debitar saldo
-      await prisma.userWallet.update({
-        where: { id: wallet.id },
-        data: {
-          balance: wallet.balance - totalAmount,
-        },
-      });
-
-      // Marcar taxas como pagas
-      await prisma.transaction.updateMany({
-        where: {
-          id: { in: pendingFees.map((fee) => fee.id) },
-        },
-        data: {
-          status: 'COMPLETED',
-          processedAt: new Date(),
-          metadata: {
-            autoCharged: true,
-            chargedAt: new Date(),
-            originalBalance: wallet.balance,
+          success: true,
+          message: `Taxas cobradas com sucesso`,
+          data: {
+            chargedAmount: totalAmount,
+            feeCount,
+            newBalance: newBalance,
           },
-        },
-      });
-
-      return {
-        success: true,
-        message: `Taxas cobradas com sucesso`,
-        data: {
-          chargedAmount: totalAmount,
-          feeCount,
-          newBalance: wallet.balance - totalAmount,
-        },
-      };
-    });
+        };
+      },
+      {
+        timeout: 15000, // Reduced timeout for fee processing
+        isolationLevel: 'ReadCommitted',
+      },
+    );
   }
 
   /**

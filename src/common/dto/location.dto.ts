@@ -1,9 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  IsNumber,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsNumber, Max, Min } from 'class-validator';
 
 /**
  * CORREÇÃO: DTO centralizado para coordenadas geográficas

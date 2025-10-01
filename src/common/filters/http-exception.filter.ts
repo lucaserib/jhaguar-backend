@@ -27,7 +27,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
       if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
-      } else if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+      } else if (
+        typeof exceptionResponse === 'object' &&
+        exceptionResponse !== null
+      ) {
         const responseObj = exceptionResponse as any;
         message = responseObj.message || responseObj.error || 'Bad Request';
         errors = responseObj.errors || null;
@@ -52,7 +55,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Log the error with context
     this.logger.error(
       `HTTP ${status} Error: ${message} - ${request.method} ${request.url}`,
-      exception instanceof Error ? exception.stack : undefined
+      exception instanceof Error ? exception.stack : undefined,
     );
 
     response.status(status).json(errorResponse);

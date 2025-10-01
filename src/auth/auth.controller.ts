@@ -36,7 +36,6 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 10, ttl: 10000 } }) // 10 requests per 10 seconds
   @ApiOperation({ summary: 'Obter informações do usuário autenticado' })
   @ApiResponse({
     status: 200,

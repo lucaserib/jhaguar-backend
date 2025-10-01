@@ -85,7 +85,9 @@ export class RedisService {
     try {
       return await this.redis.expire(key, ttl);
     } catch (error) {
-      this.logger.error(`Error setting expiry for key in Redis: ${error.message}`);
+      this.logger.error(
+        `Error setting expiry for key in Redis: ${error.message}`,
+      );
       return 0;
     }
   }
@@ -105,26 +107,26 @@ export class RedisService {
   ): Promise<void> {
     const key = `driver_location:${driverId}`;
     const ttl = 30; // 30 seconds TTL
-    
+
     try {
-      await this.redis.setex(
-        key,
-        ttl,
-        JSON.stringify(locationData),
-      );
+      await this.redis.setex(key, ttl, JSON.stringify(locationData));
     } catch (error) {
-      this.logger.error(`Error setting driver location in Redis: ${error.message}`);
+      this.logger.error(
+        `Error setting driver location in Redis: ${error.message}`,
+      );
     }
   }
 
   async getDriverLocation(driverId: string): Promise<any | null> {
     const key = `driver_location:${driverId}`;
-    
+
     try {
       const data = await this.redis.get(key);
       return data ? JSON.parse(data) : null;
     } catch (error) {
-      this.logger.error(`Error getting driver location from Redis: ${error.message}`);
+      this.logger.error(
+        `Error getting driver location from Redis: ${error.message}`,
+      );
       return null;
     }
   }
@@ -137,15 +139,13 @@ export class RedisService {
   ): Promise<void> {
     const key = `online_drivers:${lat}:${lng}:${radius}`;
     const ttl = 10; // 10 seconds TTL
-    
+
     try {
-      await this.redis.setex(
-        key,
-        ttl,
-        JSON.stringify(driverIds),
-      );
+      await this.redis.setex(key, ttl, JSON.stringify(driverIds));
     } catch (error) {
-      this.logger.error(`Error setting online drivers in Redis: ${error.message}`);
+      this.logger.error(
+        `Error setting online drivers in Redis: ${error.message}`,
+      );
     }
   }
 
@@ -155,12 +155,14 @@ export class RedisService {
     radius: number,
   ): Promise<string[] | null> {
     const key = `online_drivers:${lat}:${lng}:${radius}`;
-    
+
     try {
       const data = await this.redis.get(key);
       return data ? JSON.parse(data) : null;
     } catch (error) {
-      this.logger.error(`Error getting online drivers from Redis: ${error.message}`);
+      this.logger.error(
+        `Error getting online drivers from Redis: ${error.message}`,
+      );
       return null;
     }
   }
@@ -168,13 +170,9 @@ export class RedisService {
   async setActiveRide(rideId: string, rideData: any): Promise<void> {
     const key = `active_ride:${rideId}`;
     const ttl = 24 * 60 * 60; // 24 hours TTL
-    
+
     try {
-      await this.redis.setex(
-        key,
-        ttl,
-        JSON.stringify(rideData),
-      );
+      await this.redis.setex(key, ttl, JSON.stringify(rideData));
     } catch (error) {
       this.logger.error(`Error setting active ride in Redis: ${error.message}`);
     }
@@ -182,30 +180,34 @@ export class RedisService {
 
   async getActiveRide(rideId: string): Promise<any | null> {
     const key = `active_ride:${rideId}`;
-    
+
     try {
       const data = await this.redis.get(key);
       return data ? JSON.parse(data) : null;
     } catch (error) {
-      this.logger.error(`Error getting active ride from Redis: ${error.message}`);
+      this.logger.error(
+        `Error getting active ride from Redis: ${error.message}`,
+      );
       return null;
     }
   }
 
   async deleteActiveRide(rideId: string): Promise<void> {
     const key = `active_ride:${rideId}`;
-    
+
     try {
       await this.redis.del(key);
     } catch (error) {
-      this.logger.error(`Error deleting active ride from Redis: ${error.message}`);
+      this.logger.error(
+        `Error deleting active ride from Redis: ${error.message}`,
+      );
     }
   }
 
   async incrementDriverLocationUpdates(driverId: string): Promise<number> {
     const key = `driver_location_updates:${driverId}`;
     const ttl = 1; // 1 second window for rate limiting
-    
+
     try {
       const count = await this.redis.incr(key);
       if (count === 1) {
@@ -213,14 +215,40 @@ export class RedisService {
       }
       return count;
     } catch (error) {
-      this.logger.error(`Error incrementing location updates: ${error.message}`);
+      this.logger.error(
+        `Error incrementing location updates: ${error.message}`,
+      );
       return 0;
     }
+  }
+
+  async deleteByPattern(pattern: string): Promise<number> {
+    let deletedCount = 0;
+    const stream = this.redis.scanStream({
+      match: pattern,
+      count: 100,
+    });
+
+    try {
+      for await (const keys of stream) {
+        if (keys.length > 0) {
+          const result = await this.redis.del(...keys);
+          deletedCount += result;
+        }
+      }
+      this.logger.debug(
+        `Deleted ${deletedCount} keys matching pattern: ${pattern}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error deleting keys by pattern ${pattern}: ${error.message}`,
+      );
+    }
+
+    return deletedCount;
   }
 
   async onModuleDestroy() {
     await this.redis.disconnect();
   }
 }
-
-

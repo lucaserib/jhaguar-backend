@@ -54,6 +54,46 @@ export class IdempotencyService {
     return value;
   }
 
+  async delete(key: string): Promise<void> {
+    const namespacedKey = `idem:${key}`;
+
+    // Tentar deletar do Redis primeiro
+    try {
+      await this.redisService.del(namespacedKey);
+      this.logger.debug(`Deleted idempotency key from Redis: ${namespacedKey}`);
+    } catch (err: any) {
+      this.logger.warn(`Failed to delete from Redis: ${err.message}`);
+    }
+
+    // Também deletar da memória local como fallback
+    this.store.delete(namespacedKey);
+  }
+
+  async deleteByPattern(pattern: string): Promise<number> {
+    const namespacedPattern = `idem:${pattern}`;
+    let deletedCount = 0;
+
+    // Tentar deletar do Redis primeiro
+    try {
+      deletedCount = await this.redisService.deleteByPattern(namespacedPattern);
+      this.logger.debug(
+        `Deleted ${deletedCount} idempotency keys from Redis matching pattern: ${namespacedPattern}`,
+      );
+    } catch (err: any) {
+      this.logger.warn(`Failed to delete pattern from Redis: ${err.message}`);
+    }
+
+    // Também limpar da memória local (padrão simples)
+    for (const [key] of this.store.entries()) {
+      if (key.startsWith('idem:') && key.includes(pattern.replace('*', ''))) {
+        this.store.delete(key);
+        deletedCount++;
+      }
+    }
+
+    return deletedCount;
+  }
+
   purgeExpired(): void {
     const now = Date.now();
     for (const [key, entry] of this.store.entries()) {

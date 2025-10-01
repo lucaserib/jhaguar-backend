@@ -4,6 +4,8 @@ import {
   Body,
   BadRequestException,
   Logger,
+  Headers,
+  RawBody,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { CreatePaymentIntentDto } from './dto/create-payment-intent.dto';
@@ -39,12 +41,29 @@ export class StripeController {
       const result =
         await this.stripeService.createPaymentIntent(createPaymentDto);
 
-      return result;
+      return {
+        success: true,
+        data: result,
+        message: 'PaymentIntent criado com sucesso',
+      };
     } catch (error) {
       this.logger.error('Erro ao criar PaymentIntent:', error);
-      throw new BadRequestException(
-        error instanceof Error ? error.message : 'Erro ao criar PaymentIntent',
-      );
+
+      // Melhor tratamento de erros do Stripe
+      if (error instanceof Error) {
+        this.logger.error('Stack trace:', error.stack);
+        return {
+          success: false,
+          message: error.message,
+          data: null,
+        };
+      }
+
+      return {
+        success: false,
+        message: 'Erro desconhecido ao criar PaymentIntent',
+        data: null,
+      };
     }
   }
 
@@ -71,6 +90,31 @@ export class StripeController {
       this.logger.error('Erro ao confirmar pagamento:', error);
       throw new BadRequestException(
         error instanceof Error ? error.message : 'Erro ao confirmar pagamento',
+      );
+    }
+  }
+
+  @Post('webhook')
+  @ApiOperation({
+    summary: 'Webhook do Stripe',
+    description: 'Endpoint para receber eventos do Stripe',
+  })
+  async handleWebhook(
+    @Headers('stripe-signature') signature: string,
+    @RawBody() payload: Buffer,
+  ) {
+    try {
+      if (!signature) {
+        throw new BadRequestException('Missing stripe-signature header');
+      }
+
+      await this.stripeService.handleWebhook(signature, payload);
+
+      return { received: true };
+    } catch (error) {
+      this.logger.error('Erro ao processar webhook:', error);
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Erro ao processar webhook',
       );
     }
   }

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
@@ -19,6 +20,7 @@ import { MapsModule } from './maps/maps.module';
 import { RideTypesModule } from './ride-types/ride-types.module';
 import { StripeModule } from './stripe/stripe.module';
 import { RedisModule } from './common/redis/redis.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -26,23 +28,11 @@ import { RedisModule } from './common/redis/redis.module';
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
     }),
-    ThrottlerModule.forRoot([
-      {
-        name: 'short',
-        ttl: 1000, // 1 second
-        limit: 20, // PRODUÇÃO: 20 requests per second (seguro para produção)
-      },
-      {
-        name: 'medium',
-        ttl: 10000, // 10 seconds
-        limit: 100, // PRODUÇÃO: 100 requests per 10 seconds (equilibrado)
-      },
-      {
-        name: 'long',
-        ttl: 60000, // 1 minute
-        limit: 500, // PRODUÇÃO: 500 requests per minute (seguro)
-      },
-    ]),
+    ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot({
+      ttl: 60000, // 1 minute
+      limit: 100, // 100 requests per minute (limite adequado para produção)
+    }),
     PrismaModule,
     RedisModule,
     AuthModule,
@@ -58,6 +48,7 @@ import { RedisModule } from './common/redis/redis.module';
     DocumentsModule,
     NotificationsModule,
     StripeModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [

@@ -64,7 +64,6 @@ export class PaymentsController {
     description: 'Saldo consultado com sucesso',
     type: WalletBalanceResponse,
   })
-  @Throttle({ default: { limit: 20, ttl: 1000 } })
   async getWalletBalance(@User() user: any) {
     try {
       const balance = await this.paymentsService.getWalletBalance(user.id);
@@ -131,7 +130,6 @@ export class PaymentsController {
     description: 'Histórico retornado com sucesso',
     type: [TransactionResponse],
   })
-  @Throttle({ default: { limit: 10, ttl: 1000 } })
   async getTransactionHistory(
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
@@ -306,8 +304,7 @@ export class PaymentsController {
             status: 'PENDING',
             amount: { lt: 0 }, // Apenas débitos
           },
-          include: {
-            ride: {
+          include: { Ride: {
               select: {
                 id: true,
                 originAddress: true,
@@ -332,11 +329,11 @@ export class PaymentsController {
         amount: Math.abs(transaction.amount),
         description: transaction.description,
         createdAt: transaction.createdAt,
-        rideDetails: transaction.ride
+        rideDetails: transaction.Ride
           ? {
-              originAddress: transaction.ride.originAddress,
-              destinationAddress: transaction.ride.destinationAddress,
-              date: transaction.ride.createdAt,
+              originAddress: transaction.Ride.originAddress,
+              destinationAddress: transaction.Ride.destinationAddress,
+              date: transaction.Ride.createdAt,
             }
           : undefined,
       }));
@@ -392,7 +389,7 @@ export class PaymentsController {
               status: 'PENDING',
               amount: { lt: 0 },
             },
-            include: { wallet: true },
+            include: { UserWallet: true },
           });
 
           if (pendingFees.length === 0) {
@@ -463,6 +460,10 @@ export class PaymentsController {
             message: `${pendingFees.length} taxa(s) paga(s) com sucesso - Total: R$ ${totalAmount.toFixed(2)}`,
           };
         },
+        {
+          timeout: 15000, // Reduced timeout for fee payment
+          isolationLevel: 'ReadCommitted',
+        },
       );
     } catch (error) {
       return {
@@ -487,7 +488,6 @@ export class PaymentsController {
     description: 'Métodos de pagamento retornados',
     type: [PaymentMethodOption],
   })
-  @Throttle({ default: { limit: 20, ttl: 1000 } })
   async getPaymentMethods(@User() user: any) {
     try {
       const methods = await this.paymentsService.getPaymentMethods(user.id);
@@ -656,15 +656,13 @@ export class PaymentsController {
       const ridePayment = await this.paymentsService['prisma'].ride.findFirst({
         where: {
           id: rideId,
-          OR: [
-            { passenger: { userId: user.id } },
-            { driver: { userId: user.id } },
+          OR: [{ Passenger: { userId: user.id } },
+            { Driver: { userId: user.id } },
           ],
         },
-        include: {
-          payment: true,
-          passenger: { include: { user: true } },
-          driver: { include: { user: true } },
+        include: { Payment: true,
+          Passenger: { include: { User: true } },
+          Driver: { include: { User: true } },
         },
       });
 
@@ -692,12 +690,12 @@ export class PaymentsController {
       const paymentInfo = {
         rideId: ridePayment.id,
         paymentStatus: ridePayment.paymentStatus,
-        method: ridePayment.payment?.method || null,
-        amount: ridePayment.payment?.amount || ridePayment.finalPrice,
-        confirmedByDriver: ridePayment.payment?.confirmedByDriver || false,
+        method: ridePayment.Payment ?.method || null,
+        amount: ridePayment.Payment ?.amount || ridePayment.finalPrice,
+        confirmedByDriver: ridePayment.Payment ?.confirmedByDriver || false,
         driverConfirmationTime:
-          ridePayment.payment?.driverConfirmationTime || null,
-        driverNotes: ridePayment.payment?.driverNotes || null,
+          ridePayment.Payment ?.driverConfirmationTime || null,
+        driverNotes: ridePayment.Payment ?.driverNotes || null,
         requiresAction: this.getRequiredAction(ridePayment, user),
 
         // 🔥 NOVAS INFORMAÇÕES
@@ -771,15 +769,13 @@ export class PaymentsController {
       const ride = await this.paymentsService['prisma'].ride.findFirst({
         where: {
           id: rideId,
-          OR: [
-            { passenger: { userId: user.id } },
-            { driver: { userId: user.id } },
+          OR: [{ Passenger: { userId: user.id } },
+            { Driver: { userId: user.id } },
           ],
         },
-        include: {
-          payment: true,
-          passenger: { include: { user: { include: { wallet: true } } } },
-          driver: { include: { user: { include: { wallet: true } } } },
+        include: { Payment: true,
+          Passenger: { include: { User: { include: { UserWallet: true } } } },
+          Driver: { include: { User: { include: { UserWallet: true } } } },
         },
       });
 
@@ -812,24 +808,24 @@ export class PaymentsController {
         totalAmount: ride.finalPrice || 0,
         driverAmount: fees.netAmount,
         platformFee: fees.platformFee,
-        paymentMethod: ride.payment?.method || 'NOT_SET',
-        paymentStatus: ride.payment?.status || 'PENDING',
-        confirmedByDriver: ride.payment?.confirmedByDriver || false,
-        confirmationTime: ride.payment?.driverConfirmationTime || undefined,
-        driverNotes: ride.payment?.driverNotes || undefined,
+        paymentMethod: ride.Payment?.method || 'NOT_SET',
+        paymentStatus: ride.Payment?.status || 'PENDING',
+        confirmedByDriver: ride.Payment?.confirmedByDriver || false,
+        confirmationTime: ride.Payment?.driverConfirmationTime || undefined,
+        driverNotes: ride.Payment?.driverNotes || undefined,
         transferDetails:
           transferTransactions.length > 0
             ? {
-                fromUserId: ride.passenger.userId,
-                toUserId: ride.driver?.userId || '',
+                fromUserId: ride.Passenger.userId,
+                toUserId: ride.Driver?.userId || '',
                 amount: ride.finalPrice || 0,
                 completedAt: transferTransactions[0].processedAt || new Date(),
                 transactionIds: transferTransactions.map((t) => t.id),
               }
             : undefined,
         balances: {
-          passenger: ride.passenger.user.wallet?.balance || 0,
-          driver: ride.driver?.user.wallet?.balance || 0,
+          passenger: ride.Passenger.User.UserWallet?.balance || 0,
+          driver: ride.Driver?.User.UserWallet?.balance || 0,
         },
       };
 
@@ -917,7 +913,7 @@ export class PaymentsController {
           status: 'PENDING',
           type: 'WALLET_TOPUP',
         },
-        include: { wallet: true },
+        include: { UserWallet: true },
       });
 
       if (!transaction) {
@@ -934,11 +930,11 @@ export class PaymentsController {
         },
       });
 
-      if (transaction.wallet) {
+      if (transaction.UserWallet) {
         await this.paymentsService['prisma'].userWallet.update({
-          where: { id: transaction.wallet.id },
+          where: { id: transaction.UserWallet.id },
           data: {
-            balance: transaction.wallet.balance + transaction.amount,
+            balance: transaction.UserWallet.balance + transaction.amount,
           },
         });
       }
@@ -947,8 +943,7 @@ export class PaymentsController {
         success: true,
         data: {
           transactionId: transaction.id,
-          newBalance: transaction.wallet
-            ? transaction.wallet.balance + transaction.amount
+          newBalance: transaction.UserWallet ? transaction.UserWallet.balance + transaction.amount
             : 0,
         },
         message: 'Pagamento simulado com sucesso',
@@ -1018,12 +1013,12 @@ export class PaymentsController {
   // ==================== MÉTODOS AUXILIARES (mantidos) ====================
 
   private getRequiredAction(ridePayment: any, user: any): string | null {
-    if (!ridePayment.payment) {
+    if (!ridePayment.Payment) {
       return 'PAYMENT_REQUIRED';
     }
 
     if (
-      ridePayment.payment.status === 'PENDING' &&
+      ridePayment.Payment.status === 'PENDING' &&
       !ridePayment.payment.confirmedByDriver
     ) {
       if (user.isDriver) {
@@ -1034,8 +1029,7 @@ export class PaymentsController {
     }
 
     if (
-      ridePayment.payment.status === 'PAID' &&
-      ridePayment.payment.confirmedByDriver
+      ridePayment.Payment.status === 'PAID' && ridePayment.Payment.confirmedByDriver
     ) {
       return null;
     }

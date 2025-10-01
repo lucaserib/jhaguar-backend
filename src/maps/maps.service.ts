@@ -3,10 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { RideTypesService } from '../ride-types/ride-types.service';
 import { NearbyDriversDto, NearbyDriver } from './dto/nearby-drivers.dto';
-import {
-  CalculateRouteDto,
-  RouteResponseDto,
-} from './dto/calculate-route.dto';
+import { CalculateRouteDto, RouteResponseDto } from './dto/calculate-route.dto';
 import { CalculatePriceDto } from './dto/calculate-price.dto';
 import {
   Location,
@@ -115,13 +112,13 @@ export class MapsService {
         LIMIT $4;
       `;
 
-      const drivers = (await this.prisma.$queryRawUnsafe(
+      const drivers = await this.prisma.$queryRawUnsafe(
         rawQuery,
         data.latitude,
         data.longitude,
         data.radius,
         data.limit,
-      )) as any[];
+      ) as any[];
 
       return drivers.map((driver) => this.formatNearbyDriverResponse(driver));
     } catch (error) {
@@ -130,9 +127,7 @@ export class MapsService {
     }
   }
 
-  async calculateRouteNew(
-    data: CalculateRouteDto,
-  ): Promise<RouteResponseDto> {
+  async calculateRouteNew(data: CalculateRouteDto): Promise<RouteResponseDto> {
     try {
       this.logger.log(
         `Calculating route from ${JSON.stringify(data.origin)} to ${JSON.stringify(data.destination)}`,
@@ -193,12 +188,12 @@ export class MapsService {
         ) ASC;
       `;
 
-      const result = (await this.prisma.$queryRawUnsafe(
+      const result = await this.prisma.$queryRawUnsafe(
         rawQuery,
         centerLat,
         centerLng,
         radiusKm,
-      )) as { id: string }[];
+      ) as any[];
 
       return result.map((r) => r.id);
     } catch (error) {
@@ -271,7 +266,7 @@ export class MapsService {
       },
       distance,
       estimatedArrival,
-      vehicle: {
+      Vehicle: {
         model: driver.model || 'Não informado',
         color: driver.color || 'Não informado',
         licensePlate: driver.license_plate || 'Não informado',
@@ -310,16 +305,21 @@ export class MapsService {
       bounds: {
         northeast: {
           latitude: Math.max(data.origin.latitude, data.destination.latitude),
-          longitude: Math.max(data.origin.longitude, data.destination.longitude),
+          longitude: Math.max(
+            data.origin.longitude,
+            data.destination.longitude,
+          ),
         },
         southwest: {
           latitude: Math.min(data.origin.latitude, data.destination.latitude),
-          longitude: Math.min(data.origin.longitude, data.destination.longitude),
+          longitude: Math.min(
+            data.origin.longitude,
+            data.destination.longitude,
+          ),
         },
       },
     };
   }
-
 
   async getSmartRideRecommendations(
     userId: string,
@@ -470,7 +470,7 @@ export class MapsService {
           surge: finalPrice.surgeMultiplier > 1,
           surgeMultiplier: finalPrice.surgeMultiplier,
         },
-        driver: {
+        Driver: {
           id: selectedDriver.id,
           name: `${selectedDriver.user.firstName} ${selectedDriver.user.lastName}`,
           rating: selectedDriver.averageRating,
@@ -554,16 +554,15 @@ export class MapsService {
   private async getUserContext(userId: string): Promise<any> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: {
-        passenger: true,
+      include: { Passenger: true,
       },
     });
 
     return {
       id: userId,
       gender: user?.gender || Gender.PREFER_NOT_TO_SAY,
-      prefersFemaleDriver: user?.passenger?.prefersFemaleDriver || false,
-      specialNeeds: user?.passenger?.specialNeeds || false,
+      prefersFemaleDriver: user?.Passenger?.prefersFemaleDriver || false,
+      specialNeeds: user?.Passenger?.specialNeeds || false,
     };
   }
 
@@ -749,8 +748,7 @@ export class MapsService {
   private async getUserHistoricalChoices(userId: string): Promise<string[]> {
     try {
       const recentRides = await this.prisma.ride.findMany({
-        where: {
-          passenger: { userId },
+        where: { Passenger: { userId },
           status: 'COMPLETED',
         },
         include: {
@@ -938,8 +936,7 @@ export class MapsService {
           isAvailable: true,
           accountStatus: 'APPROVED',
         },
-        include: {
-          user: {
+        include: { User: {
             select: {
               firstName: true,
               lastName: true,
@@ -947,7 +944,7 @@ export class MapsService {
               gender: true,
             },
           },
-          vehicle: {
+          Vehicle: {
             select: {
               model: true,
               color: true,
@@ -958,12 +955,12 @@ export class MapsService {
               isLuxury: true,
               isMotorcycle: true,
               deliveryCapable: true,
+              capacity: true,
             },
           },
-          driverRideTypes: {
+          DriverRideType: {
             where: { isActive: true },
-            include: {
-              rideType: true,
+            include: { RideTypeConfig: true,
             },
           },
         },
@@ -989,11 +986,10 @@ export class MapsService {
           nearbyDrivers.push({
             id: driver.id,
             userId: driver.userId,
-            user: driver.user,
-            vehicle: driver.vehicle
-              ? {
-                  ...driver.vehicle,
-                  carImageUrl: driver.vehicle.carImageUrl || undefined,
+            user: driver.User,
+            vehicle: driver.Vehicle ? {
+                  ...driver.Vehicle,
+                  carImageUrl: driver.Vehicle.carImageUrl || undefined,
                 }
               : null,
             averageRating: driver.averageRating,
@@ -1045,8 +1041,10 @@ export class MapsService {
     } = request;
 
     try {
-      this.logger.log(`🔍 Finding drivers for ride type: ${rideTypeId}, lat: ${latitude}, lng: ${longitude}, radius: ${radius}`);
-      
+      this.logger.log(
+        `🔍 Finding drivers for ride type: ${rideTypeId}, lat: ${latitude}, lng: ${longitude}, radius: ${radius}`,
+      );
+
       const driverFilters: any = {
         isOnline: true,
         isAvailable: true,
@@ -1054,11 +1052,14 @@ export class MapsService {
         currentLatitude: { not: null },
         currentLongitude: { not: null },
       };
-      
-      this.logger.log(`📋 Base driver filters:`, JSON.stringify(driverFilters, null, 2));
+
+      this.logger.log(
+        `📋 Base driver filters:`,
+        JSON.stringify(driverFilters, null, 2),
+      );
 
       if (rideTypeId) {
-        driverFilters.driverRideTypes = {
+        driverFilters.DriverRideType = {
           some: {
             rideTypeId,
             isActive: true,
@@ -1073,23 +1074,25 @@ export class MapsService {
         : null;
 
       if (rideType?.femaleOnly) {
-        driverFilters.user = {
+        driverFilters.User = {
           gender: Gender.FEMALE,
         };
       }
 
       if (requiresArmored || rideType?.requiresArmored) {
-        driverFilters.vehicle = {
+        driverFilters.Vehicle = {
           isArmored: true,
         };
       }
 
-      this.logger.log(`🔍 Final driver filters:`, JSON.stringify(driverFilters, null, 2));
+      this.logger.log(
+        `🔍 Final driver filters:`,
+        JSON.stringify(driverFilters, null, 2),
+      );
 
       const drivers = await this.prisma.driver.findMany({
         where: driverFilters,
-        include: {
-          user: {
+        include: { User: {
             select: {
               firstName: true,
               lastName: true,
@@ -1097,7 +1100,7 @@ export class MapsService {
               gender: true,
             },
           },
-          vehicle: {
+          Vehicle: {
             select: {
               model: true,
               color: true,
@@ -1108,26 +1111,29 @@ export class MapsService {
               isLuxury: true,
               isMotorcycle: true,
               deliveryCapable: true,
+              capacity: true,
             },
           },
-          driverRideTypes: {
+          DriverRideType: {
             where: { isActive: true },
-            include: {
-              rideType: true,
+            include: { RideTypeConfig: true,
             },
           },
         },
         take: limit * 2,
       });
-      
-      this.logger.log(`🚗 Found ${drivers.length} drivers in database:`, drivers.map(d => ({
-        id: d.id,
-        isOnline: d.isOnline,
-        isAvailable: d.isAvailable,
-        accountStatus: d.accountStatus,
-        rideTypes: d.driverRideTypes.map(rt => rt.rideType.name),
-        location: [d.currentLatitude, d.currentLongitude]
-      })));
+
+      this.logger.log(
+        `🚗 Found ${drivers.length} drivers in database:`,
+        drivers.map((d) => ({
+          id: d.id,
+          isOnline: d.isOnline,
+          isAvailable: d.isAvailable,
+          accountStatus: d.accountStatus,
+          rideTypes: d.DriverRideType.map((rt) => rt.RideTypeConfig.name),
+          location: [d.currentLatitude, d.currentLongitude],
+        })),
+      );
 
       if (drivers.length > 0) {
         const nearbyDrivers: DriverWithDistance[] = [];
@@ -1144,11 +1150,10 @@ export class MapsService {
             nearbyDrivers.push({
               id: driver.id,
               userId: driver.userId,
-              user: driver.user,
-              vehicle: driver.vehicle
-                ? {
-                    ...driver.vehicle,
-                    carImageUrl: driver.vehicle.carImageUrl || undefined,
+              user: driver.User,
+              vehicle: driver.Vehicle ? {
+                    ...driver.Vehicle,
+                    carImageUrl: driver.Vehicle.carImageUrl || undefined,
                   }
                 : null,
               averageRating: driver.averageRating,
@@ -1162,13 +1167,16 @@ export class MapsService {
         }
 
         nearbyDrivers.sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        
-        this.logger.log(`📍 ${nearbyDrivers.length} drivers within radius:`, nearbyDrivers.map(d => ({
-          id: d.id,
-          distance: d.distance,
-          estimatedTime: d.estimatedTime
-        })));
-        
+
+        this.logger.log(
+          `📍 ${nearbyDrivers.length} drivers within radius:`,
+          nearbyDrivers.map((d) => ({
+            id: d.id,
+            distance: d.distance,
+            estimatedTime: d.estimatedTime,
+          })),
+        );
+
         return nearbyDrivers.slice(0, limit);
       }
 
@@ -1275,9 +1283,9 @@ export class MapsService {
 
   async calculatePrice(calculatePriceDto: CalculatePriceDto): Promise<any> {
     const {
+      rideTypeId,
       distance,
       duration,
-      vehicleType = 'ECONOMY',
       surgeMultiplier = 1,
     } = calculatePriceDto;
 
@@ -1289,10 +1297,29 @@ export class MapsService {
       throw new Error('Duração deve ser maior que zero');
     }
 
+    // Use RideTypesService for consistent price calculation
+    if (rideTypeId) {
+      try {
+        return await this.rideTypesService.calculateRidePrice({
+          rideTypeId,
+          distance,
+          duration,
+          surgeMultiplier,
+          isPremiumTime: this.isPremiumTime(),
+        });
+      } catch (error) {
+        this.logger.warn(
+          'RideTypesService calculation failed, falling back to legacy method:',
+          error,
+        );
+      }
+    }
+
+    // Fallback to legacy calculation for backward compatibility
     const price = this.calculateBasePrice({
       distance,
       duration,
-      vehicleType,
+      vehicleType: calculatePriceDto.vehicleType || 'ECONOMY',
       surgeMultiplier,
     });
 
@@ -1308,11 +1335,23 @@ export class MapsService {
       estimatedPrice: Number(price.toFixed(2)),
       currency: 'BRL',
       breakdown: {
-        baseFare: Number(this.getBaseFare(vehicleType).toFixed(2)),
-        distanceFare: Number(
-          this.getDistanceFare(distance, vehicleType).toFixed(2),
+        basePrice: Number(
+          this.getBaseFare(calculatePriceDto.vehicleType || 'ECONOMY').toFixed(
+            2,
+          ),
         ),
-        timeFare: Number(this.getTimeFare(duration, vehicleType).toFixed(2)),
+        distanceFare: Number(
+          this.getDistanceFare(
+            distance,
+            calculatePriceDto.vehicleType || 'ECONOMY',
+          ).toFixed(2),
+        ),
+        timeFare: Number(
+          this.getTimeFare(
+            duration,
+            calculatePriceDto.vehicleType || 'ECONOMY',
+          ).toFixed(2),
+        ),
         surgeFare:
           surgeMultiplier > 1
             ? Number(
@@ -1321,7 +1360,7 @@ export class MapsService {
             : 0,
       },
       surgeMultiplier: Number(surgeMultiplier),
-      vehicleType,
+      vehicleType: calculatePriceDto.vehicleType || 'ECONOMY',
     };
   }
 
@@ -1382,7 +1421,6 @@ export class MapsService {
       return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
     }
   }
-
 
   private async calculateRouteWithRoutesAPI(
     origin: Location,

@@ -138,6 +138,16 @@ export class CreateRideDto {
   @IsString()
   confirmationToken?: string;
 
+  @ApiProperty({
+    description: 'Método de pagamento selecionado pelo passageiro',
+    required: false,
+    enum: ['WALLET_BALANCE', 'CASH', 'PIX', 'CARD_MACHINE'],
+    example: 'WALLET_BALANCE',
+  })
+  @IsOptional()
+  @IsString()
+  paymentMethod?: string;
+
   // Campos flat legados (compatibilidade)
   @ApiProperty({ description: 'Endereço de origem (legado)', required: false })
   @IsOptional()
