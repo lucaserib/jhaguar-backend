@@ -371,6 +371,141 @@ export class ChatService {
     });
   }
 
+  /**
+   * Fechar chat ao finalizar corrida (encerra e marca data de término)
+   */
+  async closeChatRoom(rideId: string): Promise<void> {
+    console.log(`🔒 [ChatService] Encerrando chat da corrida: ${rideId}`);
+
+    const chat = await this.prisma.rideChat.findUnique({
+      where: { rideId },
+    });
+
+    if (!chat) {
+      console.warn(`⚠️ [ChatService] Chat não encontrado para corrida ${rideId}`);
+      return;
+    }
+
+    await this.prisma.rideChat.update({
+      where: { id: chat.id },
+      data: {
+        isActive: false,
+        endedAt: new Date(),
+      },
+    });
+
+    console.log(`✅ [ChatService] Chat ${chat.id} encerrado com sucesso`);
+  }
+
+  /**
+   * Buscar histórico de mensagens com paginação
+   */
+  async getChatHistory(
+    rideId: string,
+    userId: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ChatMessageResponseDto[]> {
+    // Validar acesso do usuário
+    const ride = await this.prisma.ride.findUnique({
+      where: { id: rideId },
+      include: {
+        Passenger: true,
+        Driver: true,
+      },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Corrida não encontrada');
+    }
+
+    const isParticipant =
+      ride.Passenger.userId === userId ||
+      (ride.Driver && ride.Driver.userId === userId);
+
+    if (!isParticipant) {
+      throw new ForbiddenException('Acesso negado ao histórico do chat');
+    }
+
+    const chat = await this.prisma.rideChat.findUnique({
+      where: { rideId },
+    });
+
+    if (!chat) {
+      return []; // Chat ainda não foi criado
+    }
+
+    const messages = await this.prisma.chatMessage.findMany({
+      where: { chatId: chat.id },
+      include: {
+        User: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            profileImage: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      skip: offset,
+    });
+
+    return messages.map((msg) => ({
+      ...this.formatMessageResponse(msg),
+      senderName: `${msg.User.firstName} ${msg.User.lastName}`.trim(),
+    }));
+  }
+
+  /**
+   * Marcar mensagens específicas como lidas
+   */
+  async markSpecificMessagesAsRead(
+    rideId: string,
+    messageIds: string[],
+    userId: string,
+  ): Promise<{ updated: number }> {
+    // Validar acesso
+    const ride = await this.prisma.ride.findUnique({
+      where: { id: rideId },
+      include: {
+        Passenger: true,
+        Driver: true,
+      },
+    });
+
+    if (!ride) {
+      throw new NotFoundException('Corrida não encontrada');
+    }
+
+    const isParticipant =
+      ride.Passenger.userId === userId ||
+      (ride.Driver && ride.Driver.userId === userId);
+
+    if (!isParticipant) {
+      throw new ForbiddenException('Acesso negado');
+    }
+
+    const result = await this.prisma.chatMessage.updateMany({
+      where: {
+        id: { in: messageIds },
+        senderId: { not: userId }, // Não marcar próprias mensagens
+        isRead: false,
+      },
+      data: {
+        isRead: true,
+        readAt: new Date(),
+      },
+    });
+
+    console.log(
+      `✅ [ChatService] ${result.count} mensagens marcadas como lidas na corrida ${rideId}`,
+    );
+
+    return { updated: result.count };
+  }
+
   private formatChatResponse(chat: any): ChatResponseDto {
     return {
       id: chat.id,
@@ -395,17 +530,23 @@ export class ChatService {
   }
 
   private formatMessageResponse(message: any): ChatMessageResponseDto {
+    const senderName = message.User
+      ? `${message.User.firstName} ${message.User.lastName}`.trim()
+      : 'Sistema';
+
     return {
       id: message.id,
       chatId: message.chatId,
       senderId: message.senderId,
+      senderName,
       senderType: message.senderType,
       content: message.content,
       type: message.type,
       isRead: message.isRead,
       readAt: message.readAt,
+      metadata: message.metadata,
       createdAt: message.createdAt,
-      User: message.User,
+      updatedAt: message.updatedAt,
     };
   }
 }

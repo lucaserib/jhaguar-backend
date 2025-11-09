@@ -28,7 +28,7 @@ import { ChatModule } from '../chat/chat.module';
     RideTypesModule,
     PaymentsModule,
     forwardRef(() => NotificationsModule),
-    ChatModule,
+    forwardRef(() => ChatModule),
     RedisModule,
   ],
   controllers: [RidesController, RidesDebugController, RidesSyncController],

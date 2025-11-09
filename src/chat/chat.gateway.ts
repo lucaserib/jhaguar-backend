@@ -179,16 +179,44 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('send-message')
   async handleSendMessage(
     @ConnectedSocket() socket: Socket,
-    @MessageBody() createMessageDto: CreateMessageDto & { userId: string },
+    @MessageBody() messageData: Omit<CreateMessageDto, 'senderType'>,
   ) {
     try {
-      const { userId, ...messageData } = createMessageDto;
+      // Usar userId do socket autenticado (segurança)
+      const userId = socket.data?.userId || (socket as any).user?.sub;
+
+      if (!userId) {
+        throw new Error('Usuário não autenticado');
+      }
+
+      console.log(`💬 [ChatGateway] Sending message from user ${userId} to ride ${messageData.rideId}`);
+
+      // Inferir senderType automaticamente com base no usuário
+      const userRecord = await this.chatService['prisma'].user.findUnique({
+        where: { id: userId },
+        include: { Driver: true, Passenger: true },
+      });
+
+      if (!userRecord) {
+        throw new Error('Usuário não encontrado');
+      }
+
+      const senderType = userRecord.Driver ? 'DRIVER' : 'PASSENGER';
+      console.log(`👤 [ChatGateway] User ${userId} is ${senderType}`);
+
+      // Construir CreateMessageDto completo
+      const createMessageDto: CreateMessageDto = {
+        ...messageData,
+        senderType: senderType as any,
+      };
 
       // Enviar mensagem através do service
-      const message = await this.chatService.sendMessage(messageData, userId);
+      const message = await this.chatService.sendMessage(createMessageDto, userId);
 
       // Emitir para todos na sala
       this.emitNewMessage(messageData.rideId, message);
+
+      console.log(`✅ [ChatGateway] Message sent successfully to ride ${messageData.rideId}`);
     } catch (error) {
       console.error('Error sending message:', error);
       socket.emit('chat-error', { message: error.message });
@@ -214,6 +242,23 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @SubscribeMessage('typing')
+  handleTyping(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() data: { rideId: string; userId: string; isTyping: boolean },
+  ) {
+    const { rideId, userId, isTyping } = data;
+    const roomName = `ride-${rideId}`;
+
+    // Emitir para todos exceto o remetente
+    socket.to(roomName).emit('user-typing', {
+      rideId,
+      userId,
+      isTyping,
+      timestamp: new Date(),
+    });
+  }
+
   // Métodos públicos para emitir eventos externamente
   emitNewMessage(rideId: string, message: ChatMessageResponseDto) {
     const roomName = `ride-${rideId}`;
@@ -231,5 +276,30 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const roomName = `ride-${rideId}`;
     this.server.to(roomName).emit('chat-deactivated', { rideId });
     console.log(`💬 Chat deactivated event emitted to room ${roomName}`);
+  }
+
+  /**
+   * Fechar chat e desconectar todos os usuários
+   */
+  async closeChatRoom(rideId: string) {
+    const roomName = `ride-${rideId}`;
+
+    console.log(`🔒 [ChatGateway] Fechando chat da corrida ${rideId}`);
+
+    // Notificar todos os participantes
+    this.server.to(roomName).emit('chat-closed', {
+      rideId,
+      message: 'Chat encerrado - corrida finalizada',
+      timestamp: new Date(),
+    });
+
+    // Desconectar todos da sala
+    const sockets = await this.server.in(roomName).fetchSockets();
+    sockets.forEach((socket) => {
+      socket.leave(roomName);
+      console.log(`📤 Socket ${socket.id} removido da sala ${roomName}`);
+    });
+
+    console.log(`✅ [ChatGateway] Chat da corrida ${rideId} encerrado`);
   }
 }

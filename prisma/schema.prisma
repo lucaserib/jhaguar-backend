@@ -13,13 +13,14 @@ model ChatMessage {
   chatId     String
   senderId   String
   senderType MessageSenderType
-  content    String
+  content    String            @db.Text
   type       MessageType       @default(TEXT)
+  metadata   Json?
   isRead     Boolean           @default(false)
   readAt     DateTime?
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
-  RideChat   RideChat          @relation(fields: [chatId], references: [id])
+  RideChat   RideChat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
   User       User              @relation(fields: [senderId], references: [id])
 
   @@index([chatId])
@@ -230,10 +231,11 @@ model RideChat {
   id          String        @id @default(uuid())
   rideId      String        @unique
   isActive    Boolean       @default(true)
+  endedAt     DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   ChatMessage ChatMessage[]
-  Ride        Ride          @relation(fields: [rideId], references: [id])
+  Ride        Ride          @relation(fields: [rideId], references: [id], onDelete: Cascade)
 
   @@index([isActive])
   @@index([rideId])
@@ -447,6 +449,7 @@ enum Gender {
 enum MessageSenderType {
   DRIVER
   PASSENGER
+  SYSTEM
 }
 
 enum MessageType {

@@ -15,6 +15,7 @@ import { IdempotencyService } from '../common/services/idempotency.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RideGateway } from './rides.gateway';
 import { ChatService } from '../chat/chat.service';
+import { ChatGateway } from '../chat/chat.gateway';
 import { RidesStateService } from './rides-state.service';
 import { CreateRideDto } from './dto/create-ride.dto';
 import { AcceptRideDto } from './dto/accept-ride.dto';
@@ -44,6 +45,8 @@ export class RidesService {
     @Inject(forwardRef(() => NotificationsService))
     private readonly notificationsService: NotificationsService,
     private readonly chatService: ChatService,
+    @Inject(forwardRef(() => ChatGateway))
+    private readonly chatGateway: ChatGateway,
     private readonly ridesStateService: RidesStateService,
   ) {
     setInterval(() => this.cleanExpiredTokens(), 5 * 60 * 1000);
@@ -1055,12 +1058,13 @@ export class RidesService {
         await this.processCancellationFee(updatedRide, cancellationFee);
       }
 
-      // Desativar chat quando corrida for cancelada
+      // 💬 FECHAR CHAT quando corrida for cancelada
       try {
-        await this.chatService.deactivateChat(rideId);
-        this.logger.log(`💬 Chat desativado para corrida cancelada: ${rideId}`);
+        await this.chatService.closeChatRoom(rideId);
+        await this.chatGateway.closeChatRoom(rideId);
+        this.logger.log(`💬 Chat fechado para corrida cancelada: ${rideId}`);
       } catch (chatError) {
-        this.logger.warn(`💬 Falha ao desativar chat: ${rideId}`, chatError);
+        this.logger.warn(`⚠️ Falha ao fechar chat: ${rideId}`, chatError);
         // Não falhar o cancelamento por erro no chat
       }
 
@@ -2028,20 +2032,15 @@ export class RidesService {
         });
       }
 
-      // 💬 DESATIVAR CHAT após corrida completada (non-blocking)
-      setImmediate(() => {
+      // 💬 FECHAR CHAT após corrida completada (non-blocking)
+      setImmediate(async () => {
         try {
-          this.chatService.deactivateChat(rideId);
-
-          // Notificar via WebSocket que o chat foi desativado
-          if (this.rideGateway) {
-            this.rideGateway.emitChatDeactivated(rideId);
-          }
-
-          this.logger.log(`💬 Chat deactivated for completed ride ${rideId}`);
+          await this.chatService.closeChatRoom(rideId);
+          await this.chatGateway.closeChatRoom(rideId);
+          this.logger.log(`💬 Chat fechado para corrida completada ${rideId}`);
         } catch (chatError) {
           this.logger.warn(
-            `Warning: Failed to deactivate chat for ride ${rideId}:`,
+            `⚠️ Falha ao fechar chat da corrida ${rideId}:`,
             chatError,
           );
         }
@@ -2155,20 +2154,15 @@ export class RidesService {
         `Ride ${rideId} cancelled. Reason: ${cancelData.reason}. Fee: ${cancellationFee}`,
       );
 
-      // 💬 DESATIVAR CHAT após corrida cancelada (non-blocking)
-      setImmediate(() => {
+      // 💬 FECHAR CHAT após corrida cancelada (non-blocking)
+      setImmediate(async () => {
         try {
-          this.chatService.deactivateChat(rideId);
-
-          // Notificar via WebSocket que o chat foi desativado
-          if (this.rideGateway) {
-            this.rideGateway.emitChatDeactivated(rideId);
-          }
-
-          this.logger.log(`💬 Chat deactivated for cancelled ride ${rideId}`);
+          await this.chatService.closeChatRoom(rideId);
+          await this.chatGateway.closeChatRoom(rideId);
+          this.logger.log(`💬 Chat fechado para corrida cancelada ${rideId}`);
         } catch (chatError) {
           this.logger.warn(
-            `Warning: Failed to deactivate chat for ride ${rideId}:`,
+            `⚠️ Falha ao fechar chat da corrida ${rideId}:`,
             chatError,
           );
         }
