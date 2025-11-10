@@ -12,8 +12,18 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
   });
 
+  // Configurar CORS baseado no ambiente
+  const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? [
+        'https://jhaguar.com.br',
+        'https://www.jhaguar.com.br',
+        'jhaguar://', // Deep linking do app
+        process.env.FRONTEND_URL, // URL do frontend se houver
+      ].filter(Boolean)
+    : true; // Em desenvolvimento, aceita qualquer origem
+
   app.enableCors({
-    origin: true,
+    origin: allowedOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: 'Content-Type,Authorization,Accept,Origin,X-Requested-With',
