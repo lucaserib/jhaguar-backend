@@ -12,12 +12,37 @@ export class RedisService {
     let redisConfig;
 
     if (redisUrl) {
-      redisConfig = redisUrl;
+      try {
+        // Parse URL manually to avoid ioredis parsing issues
+        const url = new URL(redisUrl);
+        redisConfig = {
+          host: url.hostname,
+          port: parseInt(url.port) || 6379,
+          password: url.password || undefined,
+          username: url.username !== 'default' ? url.username : undefined,
+          db: 0, // Always use database 0
+          lazyConnect: false,
+          retryStrategy: (times) => {
+            const delay = Math.min(times * 50, 2000);
+            return delay;
+          },
+        };
+        this.logger.log(`Connecting to Redis at ${url.hostname}:${url.port || 6379}`);
+      } catch (error) {
+        this.logger.error(`Error parsing REDIS_URL: ${error.message}`);
+        // Fallback to default config
+        redisConfig = {
+          host: 'localhost',
+          port: 6379,
+          db: 0,
+        };
+      }
     } else {
       redisConfig = {
         host: process.env.REDIS_HOST || 'localhost',
         port: parseInt(process.env.REDIS_PORT || '6379'),
         password: process.env.REDIS_PASSWORD || undefined,
+        db: 0,
         lazyConnect: true,
       };
     }
