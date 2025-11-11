@@ -60,5 +60,15 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s \
   CMD node -e "require('http').get('http://localhost:3000/', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
 
-# Inicializar aplicação
-CMD ["node", "dist/main"]
+# Script de inicialização que roda migrations antes de iniciar
+# Criar script de start
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo 'echo "🔄 Running database migrations..."' >> /start.sh && \
+    echo 'npx prisma migrate deploy' >> /start.sh && \
+    echo 'echo "✅ Migrations completed"' >> /start.sh && \
+    echo 'echo "🚀 Starting application..."' >> /start.sh && \
+    echo 'node dist/main' >> /start.sh && \
+    chmod +x /start.sh
+
+# Inicializar aplicação com migrations
+CMD ["/start.sh"]
