@@ -11,25 +11,35 @@ export class RedisService {
     const redisUrl = process.env.REDIS_URL;
     let redisConfig;
 
+    this.logger.log('🔧 Initializing Redis connection...');
+    this.logger.debug(`REDIS_URL exists: ${!!redisUrl}`);
+
     if (redisUrl) {
       try {
-        // Parse URL manually to avoid ioredis parsing issues
-        const url = new URL(redisUrl);
+        this.logger.debug(`Raw REDIS_URL length: ${redisUrl.length} chars`);
+
+        // Parse URL manually to avoid ioredis parsing issues with Railway URLs
+        const url = new URL(redisUrl.trim()); // Trim to remove any whitespace/brackets
+
         redisConfig = {
           host: url.hostname,
           port: parseInt(url.port) || 6379,
           password: url.password || undefined,
-          username: url.username !== 'default' ? url.username : undefined,
-          db: 0, // Always use database 0
+          username: url.username && url.username !== 'default' ? url.username : undefined,
+          db: 0, // Always use database 0 (NOT from URL path)
           lazyConnect: false,
+          enableReadyCheck: true,
+          maxRetriesPerRequest: 3,
           retryStrategy: (times) => {
             const delay = Math.min(times * 50, 2000);
+            this.logger.debug(`Redis retry attempt ${times}, delay: ${delay}ms`);
             return delay;
           },
         };
-        this.logger.log(`Connecting to Redis at ${url.hostname}:${url.port || 6379}`);
+
+        this.logger.log(`✅ Parsed Redis config: ${url.hostname}:${url.port || 6379} (db: 0)`);
       } catch (error) {
-        this.logger.error(`Error parsing REDIS_URL: ${error.message}`);
+        this.logger.error(`❌ Error parsing REDIS_URL: ${error.message}`);
         // Fallback to default config
         redisConfig = {
           host: 'localhost',
@@ -38,6 +48,7 @@ export class RedisService {
         };
       }
     } else {
+      this.logger.warn('⚠️ REDIS_URL not found, using fallback config');
       redisConfig = {
         host: process.env.REDIS_HOST || 'localhost',
         port: parseInt(process.env.REDIS_PORT || '6379'),
