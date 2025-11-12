@@ -16,13 +16,40 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ChatModule } from '../chat/chat.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
     PrismaModule,
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'dev-secret-key',
-      signOptions: { expiresIn: '7d' },
+    ConfigModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const jwtSecret = configService.get<string>('JWT_SECRET');
+
+        // Em produção, JWT_SECRET é obrigatório
+        if (process.env.NODE_ENV === 'production' && !jwtSecret) {
+          throw new Error(
+            '🔒 ERRO DE SEGURANÇA: JWT_SECRET não configurado em produção! ' +
+            'Configure a variável de ambiente JWT_SECRET no Railway.'
+          );
+        }
+
+        // Em desenvolvimento, usa fallback mas emite aviso
+        const secret = jwtSecret || 'dev-secret-key-INSECURE';
+        if (!jwtSecret) {
+          console.warn(
+            '⚠️  AVISO: Usando JWT_SECRET padrão de desenvolvimento. ' +
+            'Configure JWT_SECRET para produção!'
+          );
+        }
+
+        return {
+          secret,
+          signOptions: { expiresIn: '7d' },
+        };
+      },
     }),
     MapsModule,
     RideTypesModule,

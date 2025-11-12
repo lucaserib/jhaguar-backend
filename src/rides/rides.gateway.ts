@@ -10,9 +10,10 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { getWebSocketCorsConfig } from '../common/config/cors.config';
 
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: getWebSocketCorsConfig(),
 })
 export class RideGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;

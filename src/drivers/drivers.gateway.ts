@@ -12,9 +12,10 @@ import { LocationUpdateDto } from './dto/location-update.dto';
 import { DriversService } from './drivers.service';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { getWebSocketCorsConfig } from '../common/config/cors.config';
 
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: getWebSocketCorsConfig(),
   // Remover namespace separado - usar o mesmo namespace do RideGateway
 })
 export class DriverGateway implements OnGatewayConnection, OnGatewayDisconnect {

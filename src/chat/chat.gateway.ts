@@ -12,12 +12,11 @@ import { ChatService } from './chat.service';
 import { CreateMessageDto, ChatMessageResponseDto } from './dto';
 import { UseGuards } from '@nestjs/common';
 import { WsJwtGuard } from '../auth/ws-jwt.guard';
+import { JwtService } from '@nestjs/jwt';
+import { getWebSocketCorsConfig } from '../common/config/cors.config';
 
 @WebSocketGateway({
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
-  },
+  cors: getWebSocketCorsConfig(),
   namespace: '/chat',
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -29,7 +28,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     { socket: Socket; userId: string; rideId?: string }
   >();
 
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    private readonly jwtService: JwtService,
+  ) {}
 
   async handleConnection(socket: Socket) {
     try {
@@ -54,10 +56,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      // Validate JWT token (basic validation - WsJwtGuard will do full validation)
+      // SEGURANÇA: Valida JWT propriamente usando jwtService.verify()
+      // Isso verifica a assinatura e garante que o token não foi adulterado
       try {
-        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-        const userId = payload.sub;
+        const payload = this.jwtService.verify(token);
+        const userId = payload.sub || payload.id;
 
         console.log(`💬 [ChatGateway] Authenticated connection: userId=${userId}, rideId=${rideId}, userType=${userType}`);
 
@@ -76,8 +79,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         };
 
       } catch (authError) {
-        console.error(`💬 [ChatGateway] Invalid token for socket ${socket.id}:`, authError.message);
-        socket.emit('chat-error', { message: 'Token inválido' });
+        console.error(`💬 [ChatGateway] Invalid JWT token for socket ${socket.id}:`, authError.message);
+        socket.emit('chat-error', { message: 'Token inválido ou expirado' });
         socket.disconnect();
         return;
       }

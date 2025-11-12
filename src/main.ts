@@ -4,6 +4,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { getHttpCorsConfig } from './common/config/cors.config';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -12,22 +13,8 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
   });
 
-  // Configurar CORS baseado no ambiente
-  const allowedOrigins = process.env.NODE_ENV === 'production'
-    ? [
-        'https://jhaguar.com.br',
-        'https://www.jhaguar.com.br',
-        'jhaguar://', // Deep linking do app
-        process.env.FRONTEND_URL, // URL do frontend se houver
-      ].filter(Boolean)
-    : true; // Em desenvolvimento, aceita qualquer origem
-
-  app.enableCors({
-    origin: allowedOrigins,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
-    allowedHeaders: 'Content-Type,Authorization,Accept,Origin,X-Requested-With',
-  });
+  // Configurar CORS usando configuração centralizada
+  app.enableCors(getHttpCorsConfig());
 
   // Interceptors e filters globais
   app.useGlobalInterceptors(new LoggingInterceptor());
